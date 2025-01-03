@@ -14,7 +14,7 @@ lib = library(
     install: true,
 )
 util = library(
-    'audiowireutil',
+    'audiowire-util',
     'src/ringbuf.c',
     include_directories: inc,
     install: true,
@@ -32,7 +32,8 @@ ringbuf_test = executable(
     include_directories: inc,
     link_with: util,
 )
-install_headers('include/audiowire.h')
+
+install_headers('include/audiowire.h', 'include/ringbuf.h', subdir: 'audiowire')
 
 test('ringbuf test', ringbuf_test)
 test('audiowire test', audiowire_test)
