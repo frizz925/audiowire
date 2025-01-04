@@ -9,3 +9,5 @@
 #if FORMAT_TYPE == FORMAT_S16
 #define SAMPLE_SIZE 2
 #endif
+
+#define error_result(err, ptr, message) if (ptr != NULL) *ptr = message; return err

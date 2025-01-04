@@ -4,7 +4,6 @@
 #include <assert.h>
 #include <portaudio.h>
 #include <stdbool.h>
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -56,10 +55,12 @@ static int on_stream_write(const void *input,
     }
 }
 
-static int start_stream(aw_stream_t **s, const char *name, void *callback, void *userdata, bool is_input) {
+static aw_result_t start_stream(aw_stream_t **s, const char *name, void *callback, void *userdata, bool is_input) {
     assert(callback != NULL);
 
+    const char *message = NULL;
     PaError err = paNoError;
+
     aw_stream_t *stream = malloc(sizeof(aw_stream_t));
     stream->userdata = userdata;
     if (is_input)
@@ -82,6 +83,7 @@ static int start_stream(aw_stream_t **s, const char *name, void *callback, void 
     }
     if (device == paNoDevice) {
         err = -1;
+        message = "Device not found";
         goto error;
     }
 
@@ -103,43 +105,49 @@ static int start_stream(aw_stream_t **s, const char *name, void *callback, void 
                         is_input ? on_stream_read : on_stream_write,
                         stream);
     if (err)
-        goto error;
+        goto pa_error;
     if ((err = Pa_StartStream(stream->handle)))
-        goto error;
+        goto pa_error;
 
     *s = stream;
-    return err;
+    return aw_result_no_error;
+
+pa_error:
+    message = Pa_GetErrorText(err);
 
 error:
     free(stream);
-    printf("PaError: %s\n", Pa_GetErrorText(err));
-    return err;
+    return aw_result(err, message);
 }
 
-int aw_initialize() {
-    return Pa_Initialize();
+aw_result_t aw_initialize() {
+    PaError err = Pa_Initialize();
+    return err ? aw_result(err, Pa_GetErrorText(err)) : aw_result_no_error;
 }
 
-int aw_start_record(aw_stream_t **stream, const char *name, aw_stream_read_callback_t *callback, void *userdata) {
+aw_result_t
+aw_start_record(aw_stream_t **stream, const char *name, aw_stream_read_callback_t *callback, void *userdata) {
     return start_stream(stream, name, callback, userdata, true);
 }
 
-int aw_start_playback(aw_stream_t **stream, const char *name, aw_stream_write_callback_t *callback, void *userdata) {
+aw_result_t
+aw_start_playback(aw_stream_t **stream, const char *name, aw_stream_write_callback_t *callback, void *userdata) {
     return start_stream(stream, name, callback, userdata, false);
 }
 
-int aw_stop(aw_stream_t *stream) {
+aw_result_t aw_stop(aw_stream_t *stream) {
     PaError err = paNoError;
     if (Pa_IsStreamActive(stream->handle)) {
         if ((err = Pa_StopStream(stream->handle)))
-            return err;
+            return aw_result(err, Pa_GetErrorText(err));
     }
     if ((err = Pa_CloseStream(stream->handle)))
-        return err;
+        return aw_result(err, Pa_GetErrorText(err));
     free(stream);
-    return 0;
+    return aw_result_no_error;
 }
 
-int aw_terminate() {
-    return Pa_Terminate();
+aw_result_t aw_terminate() {
+    PaError err = Pa_Terminate();
+    return err ? aw_result(err, Pa_GetErrorText(err)) : aw_result_no_error;
 }

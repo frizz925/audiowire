@@ -13,6 +13,8 @@
 
 #define AUDIO_BUFSIZE 65536
 
+#define assert_aw_result(res) assert(aw_result_is_ok(res))
+
 static struct sockaddr_in saddr;
 static int saddrlen = sizeof(saddr);
 
@@ -55,18 +57,18 @@ int main() {
     aw_stream_t *record, *playback;
     ringbuf_t *rb = ringbuf_create(AUDIO_BUFSIZE);
 
-    assert(aw_initialize() == 0);
-    assert(aw_start_record(&record, NULL, read_callback, rb) == 0);
-    assert(aw_start_playback(&playback, NULL, write_callback, rb) == 0);
+    assert_aw_result(aw_initialize());
+    assert_aw_result(aw_start_record(&record, NULL, read_callback, rb));
+    assert_aw_result(aw_start_playback(&playback, NULL, write_callback, rb));
 
     int rlen = recvfrom(sock, rbuf, sizeof(rbuf), 0, NULL, NULL);
     int wlen = recvfrom(sock, wbuf, sizeof(wbuf), 0, NULL, NULL);
     assert(rlen == wlen);
     assert(memcmp(rbuf, wbuf, rlen) == 0);
 
-    assert(aw_stop(playback) == 0);
-    assert(aw_stop(record) == 0);
-    assert(aw_terminate() == 0);
+    assert_aw_result(aw_stop(playback));
+    assert_aw_result(aw_stop(record));
+    assert_aw_result(aw_terminate());
 
     close(sock);
 
