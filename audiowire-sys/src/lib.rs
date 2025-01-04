@@ -102,6 +102,9 @@ mod tests {
                 writer_ptr as *mut c_void,
             ));
 
+            assert!(!aw_device_name(record).is_null());
+            assert!(!aw_device_name(playback).is_null());
+
             let first = notify_rx.recv().unwrap();
             let second = notify_rx.recv().unwrap();
             assert_eq!(first, second);
