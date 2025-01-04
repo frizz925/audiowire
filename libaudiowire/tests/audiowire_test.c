@@ -30,9 +30,11 @@ int write_callback(char *data, size_t bufsize, void *userdata) {
         size_t read = ringbuf_read(rb, data, bufsize);
         int sock = socket(AF_INET, SOCK_DGRAM, 0);
         sendto(sock, data, read, 0, (struct sockaddr *)&saddr, saddrlen);
-    } else
+        return AW_STREAM_STOP;
+    } else {
         memset(data, 0, bufsize);
-    return AW_STREAM_STOP;
+        return AW_STREAM_CONTINUE;
+    }
 }
 
 int main() {
