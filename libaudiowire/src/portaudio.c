@@ -6,6 +6,7 @@
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #define PA_FRAMES_PER_BUFFER (PACKET_DURATION_MS * CHANNELS * SAMPLE_RATE / 1000)
 #define audio_bufsize(count) (CHANNELS * SAMPLE_SIZE * count)
@@ -21,16 +22,12 @@ struct aw_stream {
     void *userdata;
 };
 
-int aw_init() {
-    return Pa_Initialize();
-}
-
-int on_stream_read(const void *input,
-                   void *output,
-                   unsigned long count,
-                   const PaStreamCallbackTimeInfo *info,
-                   PaStreamCallbackFlags flags,
-                   void *userdata) {
+static int on_stream_read(const void *input,
+                          void *output,
+                          unsigned long count,
+                          const PaStreamCallbackTimeInfo *info,
+                          PaStreamCallbackFlags flags,
+                          void *userdata) {
     aw_stream_t *stream = (aw_stream_t *)userdata;
     switch (stream->read_cb(input, audio_bufsize(count), stream->userdata)) {
     case AW_STREAM_STOP:
@@ -42,12 +39,12 @@ int on_stream_read(const void *input,
     }
 }
 
-int on_stream_write(const void *input,
-                    void *output,
-                    unsigned long count,
-                    const PaStreamCallbackTimeInfo *info,
-                    PaStreamCallbackFlags flags,
-                    void *userdata) {
+static int on_stream_write(const void *input,
+                           void *output,
+                           unsigned long count,
+                           const PaStreamCallbackTimeInfo *info,
+                           PaStreamCallbackFlags flags,
+                           void *userdata) {
     aw_stream_t *stream = (aw_stream_t *)userdata;
     switch (stream->write_cb(output, audio_bufsize(count), stream->userdata)) {
     case AW_STREAM_STOP:
@@ -59,8 +56,8 @@ int on_stream_write(const void *input,
     }
 }
 
-int start_stream(aw_stream_t **s, void *callback, void *userdata, bool is_input) {
-    assert(userdata != NULL);
+static int start_stream(aw_stream_t **s, const char *name, void *callback, void *userdata, bool is_input) {
+    assert(callback != NULL);
 
     PaError err = paNoError;
     aw_stream_t *stream = malloc(sizeof(aw_stream_t));
@@ -71,6 +68,23 @@ int start_stream(aw_stream_t **s, void *callback, void *userdata, bool is_input)
         stream->write_cb = (aw_stream_write_callback_t *)callback;
 
     PaDeviceIndex device = is_input ? Pa_GetDefaultInputDevice() : Pa_GetDefaultOutputDevice();
+    if (name != NULL) {
+        device = paNoDevice;
+        for (PaDeviceIndex idx = 0; idx < Pa_GetDeviceCount(); idx++) {
+            const PaDeviceInfo *info = Pa_GetDeviceInfo(idx);
+            if (!strstr(info->name, name))
+                continue;
+            if ((is_input && info->maxInputChannels < CHANNELS) || (!is_input && info->maxOutputChannels < CHANNELS))
+                continue;
+            device = idx;
+            break;
+        }
+    }
+    if (device == paNoDevice) {
+        err = -1;
+        goto error;
+    }
+
     const PaDeviceInfo *info = Pa_GetDeviceInfo(device);
     PaStreamParameters params = {
         .device = device,
@@ -102,12 +116,16 @@ error:
     return err;
 }
 
-int aw_start_record(aw_stream_t **stream, aw_stream_read_callback_t *callback, void *userdata) {
-    return start_stream(stream, callback, userdata, true);
+int aw_initialize() {
+    return Pa_Initialize();
 }
 
-int aw_start_playback(aw_stream_t **stream, aw_stream_write_callback_t *callback, void *userdata) {
-    return start_stream(stream, callback, userdata, false);
+int aw_start_record(aw_stream_t **stream, const char *name, aw_stream_read_callback_t *callback, void *userdata) {
+    return start_stream(stream, name, callback, userdata, true);
+}
+
+int aw_start_playback(aw_stream_t **stream, const char *name, aw_stream_write_callback_t *callback, void *userdata) {
+    return start_stream(stream, name, callback, userdata, false);
 }
 
 int aw_stop(aw_stream_t *stream) {

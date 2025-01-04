@@ -13,10 +13,10 @@
 
 #define AUDIO_BUFSIZE 65536
 
-struct sockaddr_in saddr;
-int saddrlen = sizeof(saddr);
+static struct sockaddr_in saddr;
+static int saddrlen = sizeof(saddr);
 
-int read_callback(const char *data, size_t bufsize, void *userdata) {
+static int read_callback(const char *data, size_t bufsize, void *userdata) {
     int sock = socket(AF_INET, SOCK_DGRAM, 0);
     int send = sendto(sock, data, bufsize, 0, (struct sockaddr *)&saddr, saddrlen);
     ringbuf_t *rb = (ringbuf_t *)userdata;
@@ -24,7 +24,7 @@ int read_callback(const char *data, size_t bufsize, void *userdata) {
     return AW_STREAM_STOP;
 }
 
-int write_callback(char *data, size_t bufsize, void *userdata) {
+static int write_callback(char *data, size_t bufsize, void *userdata) {
     ringbuf_t *rb = (ringbuf_t *)userdata;
     if (ringbuf_remaining(rb) >= bufsize) {
         size_t read = ringbuf_read(rb, data, bufsize);
@@ -55,9 +55,9 @@ int main() {
     aw_stream_t *record, *playback;
     ringbuf_t *rb = ringbuf_create(AUDIO_BUFSIZE);
 
-    assert(aw_init() == 0);
-    assert(aw_start_record(&record, read_callback, rb) == 0);
-    assert(aw_start_playback(&playback, write_callback, rb) == 0);
+    assert(aw_initialize() == 0);
+    assert(aw_start_record(&record, NULL, read_callback, rb) == 0);
+    assert(aw_start_playback(&playback, NULL, write_callback, rb) == 0);
 
     int rlen = recvfrom(sock, rbuf, sizeof(rbuf), 0, NULL, NULL);
     int wlen = recvfrom(sock, wbuf, sizeof(wbuf), 0, NULL, NULL);

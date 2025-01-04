@@ -15,9 +15,9 @@ typedef enum aw_stream_callback_result {
 typedef int aw_stream_read_callback_t(const char *data, size_t bufsize, void *userdata);
 typedef int aw_stream_write_callback_t(char *data, size_t bufsize, void *userdata);
 
-int aw_init();
-int aw_start_record(aw_stream_t **stream, aw_stream_read_callback_t *callback, void *userdata);
-int aw_start_playback(aw_stream_t **stream, aw_stream_write_callback_t *callback, void *userdata);
+int aw_initialize();
+int aw_start_record(aw_stream_t **stream, const char *name, aw_stream_read_callback_t *callback, void *userdata);
+int aw_start_playback(aw_stream_t **stream, const char *name, aw_stream_write_callback_t *callback, void *userdata);
 int aw_stop(aw_stream_t *stream);
 int aw_terminate();
 
