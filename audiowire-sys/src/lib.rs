@@ -69,10 +69,11 @@ mod tests {
             };
             let userdata_ptr = Box::into_raw(Box::new(userdata));
 
-            assert_eq!(aw_init(), 0);
+            assert_eq!(aw_initialize(), 0);
             assert_eq!(
                 aw_start_record(
                     &mut record,
+                    ptr::null(),
                     Some(read_callback),
                     userdata_ptr as *mut c_void
                 ),
@@ -81,6 +82,7 @@ mod tests {
             assert_eq!(
                 aw_start_playback(
                     &mut playback,
+                    ptr::null(),
                     Some(write_callback),
                     userdata_ptr as *mut c_void
                 ),
