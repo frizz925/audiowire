@@ -61,6 +61,9 @@ int main() {
     assert_aw_result(aw_start_record(&record, NULL, read_callback, rb));
     assert_aw_result(aw_start_playback(&playback, NULL, write_callback, rb));
 
+    assert(aw_device_name(record) != NULL);
+    assert(aw_device_name(playback) != NULL);
+
     int rlen = recvfrom(sock, rbuf, sizeof(rbuf), 0, NULL, NULL);
     int wlen = recvfrom(sock, wbuf, sizeof(wbuf), 0, NULL, NULL);
     assert(rlen == wlen);

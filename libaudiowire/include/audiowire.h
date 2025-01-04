@@ -33,6 +33,7 @@ typedef int aw_stream_write_callback_t(char *data, size_t bufsize, void *userdat
 aw_result_t aw_initialize();
 aw_result_t aw_start_record(aw_stream_t **stream, const char *name, aw_stream_read_callback_t *callback, void *userdata);
 aw_result_t aw_start_playback(aw_stream_t **stream, const char *name, aw_stream_write_callback_t *callback, void *userdata);
+const char* aw_device_name(aw_stream_t *stream);
 aw_result_t aw_stop(aw_stream_t *stream);
 aw_result_t aw_terminate();
 

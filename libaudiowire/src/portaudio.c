@@ -18,6 +18,7 @@ struct aw_stream {
     PaStream *handle;
     aw_stream_read_callback_t *read_cb;
     aw_stream_write_callback_t *write_cb;
+    const char *devname;
     void *userdata;
 };
 
@@ -88,6 +89,8 @@ static aw_result_t start_stream(aw_stream_t **s, const char *name, void *callbac
     }
 
     const PaDeviceInfo *info = Pa_GetDeviceInfo(device);
+    stream->devname = info->name;
+
     PaStreamParameters params = {
         .device = device,
         .channelCount = CHANNELS,
@@ -95,7 +98,6 @@ static aw_result_t start_stream(aw_stream_t **s, const char *name, void *callbac
         .suggestedLatency = is_input ? info->defaultLowInputLatency : info->defaultLowOutputLatency,
         .hostApiSpecificStreamInfo = 0,
     };
-
     err = Pa_OpenStream(&stream->handle,
                         is_input ? &params : NULL,
                         is_input ? NULL : &params,
@@ -133,6 +135,10 @@ aw_start_record(aw_stream_t **stream, const char *name, aw_stream_read_callback_
 aw_result_t
 aw_start_playback(aw_stream_t **stream, const char *name, aw_stream_write_callback_t *callback, void *userdata) {
     return start_stream(stream, name, callback, userdata, false);
+}
+
+const char *aw_device_name(aw_stream_t *stream) {
+    return stream->devname;
 }
 
 aw_result_t aw_stop(aw_stream_t *stream) {
