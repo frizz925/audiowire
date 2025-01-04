@@ -2,6 +2,7 @@ use std::{env, path::PathBuf};
 
 fn main() {
     println!("cargo:rustc-link-lib=audiowire");
+    println!("cargo:rustc-link-lib=audiowire-util");
 
     let bindings = bindgen::Builder::default()
         .header("wrapper.h")
