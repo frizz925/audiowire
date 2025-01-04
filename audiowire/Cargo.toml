@@ -4,3 +4,9 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+audiowire-sys = { path = "../audiowire-sys" }
+chrono = "0.4.39"
+opus = "0.3.0"
+slog = "2.7.0"
+slog-async = "2.8.0"
+slog-term = "2.9.1"
