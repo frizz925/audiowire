@@ -3,7 +3,8 @@ project('libaudiowire', 'c')
 compiler = meson.get_compiler('c')
 
 src = 'src/portaudio.c'
-deps = compiler.find_library('portaudio')
+deps = compiler.find_library('portaudio', required: true)
+test_deps = compiler.find_library('ws2_32', required: true)
 inc = include_directories('include')
 
 lib = library(
@@ -25,6 +26,7 @@ audiowire_test = executable(
     'tests/audiowire_test.c',
     include_directories: inc,
     link_with: [lib, util],
+    dependencies: test_deps,
 )
 ringbuf_test = executable(
     'ringbuf-test',
