@@ -6,7 +6,12 @@ include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
 
 #[cfg(test)]
 mod tests {
-    use std::{ffi::c_char, os::raw::c_void, ptr, slice, sync::mpsc};
+    use std::{
+        ffi::{c_char, CStr},
+        os::raw::c_void,
+        ptr, slice,
+        sync::mpsc,
+    };
 
     use crate::*;
 
@@ -56,6 +61,13 @@ mod tests {
         result.try_into().unwrap()
     }
 
+    fn assert_aw_result(res: aw_result) {
+        if res.code != 0 {
+            let message = unsafe { CStr::from_ptr(res.message).to_string_lossy() };
+            panic!("Result is error: code={}, message={}", res.code, message)
+        }
+    }
+
     #[test]
     fn start_stop_stream() {
         unsafe {
@@ -69,33 +81,27 @@ mod tests {
             };
             let userdata_ptr = Box::into_raw(Box::new(userdata));
 
-            assert_eq!(aw_initialize(), 0);
-            assert_eq!(
-                aw_start_record(
-                    &mut record,
-                    ptr::null(),
-                    Some(read_callback),
-                    userdata_ptr as *mut c_void
-                ),
-                0
-            );
-            assert_eq!(
-                aw_start_playback(
-                    &mut playback,
-                    ptr::null(),
-                    Some(write_callback),
-                    userdata_ptr as *mut c_void
-                ),
-                0
-            );
+            assert_aw_result(aw_initialize());
+            assert_aw_result(aw_start_record(
+                &mut record,
+                ptr::null(),
+                Some(read_callback),
+                userdata_ptr as *mut c_void,
+            ));
+            assert_aw_result(aw_start_playback(
+                &mut playback,
+                ptr::null(),
+                Some(write_callback),
+                userdata_ptr as *mut c_void,
+            ));
 
             let first = rx.recv().unwrap();
             let second = rx.recv().unwrap();
             assert_eq!(first, second);
 
-            assert_eq!(aw_stop(playback), 0);
-            assert_eq!(aw_stop(record), 0);
-            assert_eq!(aw_terminate(), 0);
+            assert_aw_result(aw_stop(playback));
+            assert_aw_result(aw_stop(record));
+            assert_aw_result(aw_terminate());
         }
     }
 }
