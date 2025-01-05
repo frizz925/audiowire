@@ -1,89 +1,20 @@
 use std::{
-    ffi::{c_char, c_int, c_void, CStr, CString},
-    ptr, slice,
+    ffi::{c_char, CStr, CString},
+    ptr,
 };
 
 use audiowire_sys::*;
-use slog::{error, o, Logger};
 
-use super::result::{parse_result, parse_result_lazy, Result};
+use super::result::{parse_result_lazy, Result};
 
-pub enum CallbackResult {
-    Continue,
-    Stop,
-    Abort,
-}
-
-impl CallbackResult {
-    fn to_cint(&self) -> c_int {
-        (match self {
-            Self::Continue => aw_stream_callback_result_AW_STREAM_CONTINUE,
-            Self::Stop => aw_stream_callback_result_AW_STREAM_STOP,
-            Self::Abort => aw_stream_callback_result_AW_STREAM_ABORT,
-        }) as c_int
-    }
-}
-
-pub type ReadCallback = fn(&[u8], *mut c_void) -> CallbackResult;
-pub type WriteCallback = fn(&mut [u8], *mut c_void) -> CallbackResult;
-
-struct Context<F, T> {
-    callback: F,
-    userdata: *mut T,
-}
-
-impl<F, T> Context<F, T> {
-    fn new(callback: F, userdata: T) -> Self {
-        Self {
-            callback,
-            userdata: Box::into_raw(Box::new(userdata)),
-        }
-    }
-
-    fn new_ptr(callback: F, userdata: T) -> *mut Self {
-        Box::into_raw(Box::new(Self::new(callback, userdata)))
-    }
-}
-
-impl<F, T> Drop for Context<F, T> {
-    fn drop(&mut self) {
-        unsafe {
-            if !self.userdata.is_null() {
-                ptr::drop_in_place(self.userdata);
-            }
-        }
-    }
-}
-
-pub trait Stream: Sync + Send {
-    fn device_name(&self) -> Option<&str>;
-    fn stop(&mut self) -> Result<()>;
-}
-
-enum StreamType {
-    Record,
-    Playback,
-}
-
-struct StreamImpl<F, T> {
-    logger: Logger,
+pub struct BaseStream {
     handle: *mut aw_stream,
-    userdata: *mut Context<F, T>,
     devname: Option<String>,
     running: bool,
 }
 
-impl<F, T> StreamImpl<F, T> {
-    fn new(
-        stype: StreamType,
-        logger: &Logger,
-        handle: *mut aw_stream,
-        context: *mut Context<F, T>,
-    ) -> Self {
-        let stream_type = match stype {
-            StreamType::Record => "record",
-            StreamType::Playback => "playback",
-        };
+impl BaseStream {
+    fn new(handle: *mut aw_stream) -> Self {
         let devname = unsafe {
             let cstr = aw_device_name(handle);
             if !cstr.is_null() {
@@ -93,109 +24,104 @@ impl<F, T> StreamImpl<F, T> {
             }
         };
         Self {
-            logger: logger.new(o!("stream" => stream_type)),
             handle,
-            userdata: context,
             devname,
             running: true,
         }
     }
 }
 
-impl<F, T> Stream for StreamImpl<F, T> {
-    fn device_name(&self) -> Option<&str> {
-        self.devname.as_ref().map(|s| s.as_str())
+pub trait StreamInternal {
+    fn base(&self) -> &BaseStream;
+    fn base_mut(&mut self) -> &mut BaseStream;
+}
+
+pub trait Stream: StreamInternal {
+    fn device_name(&self) -> Option<String> {
+        self.base().devname.clone()
     }
 
     // Stop is idempotent
     fn stop(&mut self) -> Result<()> {
-        if self.running {
-            unsafe {
-                parse_result(aw_stop(self.handle)).map(|v| {
-                    self.running = false;
-                    v
-                })
-            }
+        let base = self.base_mut();
+        if base.running {
+            unsafe { parse_result_lazy(aw_stop(base.handle), || base.running = false) }
         } else {
             Ok(())
         }
     }
 }
 
-impl<F, T> Drop for StreamImpl<F, T> {
-    fn drop(&mut self) {
-        match self.stop() {
-            Ok(_) => unsafe { ptr::drop_in_place(self.userdata) },
-            Err(err) => error!(self.logger, "Failed to stop stream: {}", err),
-        }
+pub struct RecordStream {
+    base: BaseStream,
+}
+
+impl RecordStream {
+    pub fn read(&mut self, buf: &mut [u8]) -> usize {
+        unsafe { aw_record_read(self.base.handle, buf.as_mut_ptr() as *mut c_char, buf.len()) }
     }
 }
 
-unsafe impl<F, T> Sync for StreamImpl<F, T> {}
-unsafe impl<F, T> Send for StreamImpl<F, T> {}
+impl StreamInternal for RecordStream {
+    fn base(&self) -> &BaseStream {
+        &self.base
+    }
 
-unsafe extern "C" fn read_callback(
-    buf: *const c_char,
-    bufsize: usize,
-    userdata: *mut c_void,
-) -> c_int {
-    let context = userdata as *mut Context<ReadCallback, c_void>;
-    let bufslice = slice::from_raw_parts(buf as *const u8, bufsize);
-    ((*context).callback)(bufslice, (*context).userdata).to_cint()
+    fn base_mut(&mut self) -> &mut BaseStream {
+        &mut self.base
+    }
 }
 
-unsafe extern "C" fn write_callback(
-    buf: *mut c_char,
-    bufsize: usize,
-    userdata: *mut c_void,
-) -> c_int {
-    let context = userdata as *mut Context<WriteCallback, c_void>;
-    let bufslice = slice::from_raw_parts_mut(buf as *mut u8, bufsize);
-    ((*context).callback)(bufslice, (*context).userdata).to_cint()
-}
+impl Stream for RecordStream {}
 
-pub fn start_record<T>(
-    logger: &Logger,
-    name: Option<&str>,
-    callback: ReadCallback,
-    userdata: T,
-) -> Result<impl Stream> {
-    let context = Context::new_ptr(callback, userdata);
+unsafe impl Sync for RecordStream {}
+unsafe impl Send for RecordStream {}
+
+pub fn start_record(name: Option<&str>) -> Result<RecordStream> {
     let mut handle: *mut aw_stream = ptr::null_mut();
     let result = unsafe {
         let cname = name.map(|s| CString::new(s).unwrap());
         let name_ptr = cname.map(|s| s.as_ptr()).unwrap_or(ptr::null());
-        aw_start_record(
-            &mut handle,
-            name_ptr,
-            Some(read_callback),
-            context as *mut c_void,
-        )
+        aw_start_record(&mut handle, name_ptr)
     };
-    parse_result_lazy(result, || {
-        StreamImpl::new(StreamType::Record, logger, handle, context)
+    parse_result_lazy(result, || RecordStream {
+        base: BaseStream::new(handle),
     })
 }
 
-pub fn start_playback<T>(
-    logger: &Logger,
-    name: Option<&str>,
-    callback: WriteCallback,
-    userdata: T,
-) -> Result<impl Stream> {
-    let context = Context::new_ptr(callback, userdata);
+pub struct PlaybackStream {
+    base: BaseStream,
+}
+
+impl PlaybackStream {
+    pub fn write(&mut self, buf: &[u8]) -> usize {
+        unsafe { aw_playback_write(self.base.handle, buf.as_ptr() as *mut c_char, buf.len()) }
+    }
+}
+
+impl StreamInternal for PlaybackStream {
+    fn base(&self) -> &BaseStream {
+        &self.base
+    }
+
+    fn base_mut(&mut self) -> &mut BaseStream {
+        &mut self.base
+    }
+}
+
+impl Stream for PlaybackStream {}
+
+unsafe impl Sync for PlaybackStream {}
+unsafe impl Send for PlaybackStream {}
+
+pub fn start_playback(name: Option<&str>) -> Result<PlaybackStream> {
     let mut handle: *mut aw_stream = ptr::null_mut();
     let result = unsafe {
         let cname = name.map(|s| CString::new(s).unwrap());
         let name_ptr = cname.map(|s| s.as_ptr()).unwrap_or(ptr::null());
-        aw_start_playback(
-            &mut handle,
-            name_ptr,
-            Some(write_callback),
-            context as *mut c_void,
-        )
+        aw_start_playback(&mut handle, name_ptr)
     };
-    parse_result_lazy(result, || {
-        StreamImpl::new(StreamType::Playback, logger, handle, context)
+    parse_result_lazy(result, || PlaybackStream {
+        base: BaseStream::new(handle),
     })
 }

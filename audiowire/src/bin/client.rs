@@ -1,64 +1,41 @@
-use std::{
-    env,
-    error::Error,
-    ffi::c_void,
-    io::{Read, Write},
-    net::TcpStream,
-};
+use std::{env, error::Error, io::Write, net::TcpStream, thread::sleep, time::Duration};
 
-use audiowire::{logging, CallbackResult, Stream};
-use slog::{error, info, o, Logger};
-
-struct Context {
-    logger: Logger,
-    socket: TcpStream,
-}
+use audiowire::{logging, Stream};
+use slog::{debug, info, o};
 
 fn main() -> Result<(), String> {
     let mut args = env::args();
     if let Some(addr) = args.nth(1) {
         let name = args.next();
-        let name_ref = name.as_ref().map(|s| s.as_str());
-        run(addr, name_ref).map_err(|err| err.to_string())
+        run(addr, name).map_err(|err| err.to_string())
     } else {
         Err("Address argument is required".to_string())
     }
 }
 
-fn run(addr: String, name: Option<&str>) -> Result<(), Box<dyn Error>> {
-    let logger = logging::term_logger();
+fn run(addr: String, name: Option<String>) -> Result<(), Box<dyn Error>> {
+    let root_logger = logging::term_logger();
 
     audiowire::initialize()?;
 
-    let mut buf = [0u8; 16];
     let mut socket = TcpStream::connect(addr)?;
-    info!(logger, "Connected to server: {}", socket.peer_addr()?);
+    info!(root_logger, "Connected to server: {}", socket.peer_addr()?);
 
-    let context = Context {
-        logger: logger.new(o!()),
-        socket: socket.try_clone()?,
+    let name_str = name.as_ref().map(|s| s.as_str());
+    let mut stream = audiowire::start_record(name_str)?;
+    let logger = match stream.device_name() {
+        Some(device) => root_logger.new(o!("device" => device)),
+        None => root_logger,
     };
-    let mut stream = audiowire::start_record(&logger, name, handle_record, context)?;
-    match stream.device_name() {
-        Some(device) => info!(logger, "Record started, device: {}", device),
-        None => info!(logger, "Record started"),
-    }
+    info!(logger, "Record started");
 
-    socket.read(&mut buf)?;
-    stream.stop()?;
-    info!(logger, "Record stopped");
-
-    audiowire::terminate()?;
-
-    Ok(())
-}
-
-fn handle_record(buf: &[u8], userdata: *mut c_void) -> CallbackResult {
-    let ctx = unsafe { &mut *(userdata as *mut Context) };
-    if let Err(err) = ctx.socket.write_all(buf) {
-        error!(ctx.logger, "Write error: {}", err);
-        CallbackResult::Abort
-    } else {
-        CallbackResult::Continue
+    let mut buf = [0u8; 65536];
+    loop {
+        sleep(Duration::from_millis(20));
+        let read = stream.read(&mut buf);
+        if read > 0 {
+            debug!(logger, "Read: {}", read);
+            socket.write_all(&buf[..read])?;
+        }
     }
 }
