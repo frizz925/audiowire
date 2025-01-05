@@ -9,8 +9,10 @@ deps = []
 
 host_system = host_machine.system()
 if host_system == 'linux'
-    src += 'src/pulseaudio.c'
-    deps += compiler.find_library('pulse', required: true)
+    # src += 'src/pulseaudio.c'
+    # deps += compiler.find_library('pulse', required: true)
+    src += 'src/portaudio.c'
+    deps += compiler.find_library('portaudio', required: true)
 else
     src += 'src/portaudio.c'
     deps += compiler.find_library('portaudio', required: true)

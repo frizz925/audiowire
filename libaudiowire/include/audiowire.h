@@ -11,7 +11,7 @@ typedef struct aw_result {
     const char *message;
 } aw_result_t;
 
-static aw_result_t aw_result_no_error = {0};
+aw_result_t aw_result_no_error = {0};
 
 static inline aw_result_t aw_result(int code, const char *message) {
     aw_result_t result = {code, message};

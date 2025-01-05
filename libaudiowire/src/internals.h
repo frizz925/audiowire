@@ -1,3 +1,6 @@
+#ifndef _INTERNALS_H_
+#define _INTERNALS_H_
+
 #define CHANNELS 2
 #define SAMPLE_RATE 48000
 #define PACKET_DURATION_MS 20
@@ -15,3 +18,5 @@
     if (ptr != NULL) \
         *ptr = message; \
     return err
+
+#endif
