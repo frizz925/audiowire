@@ -94,11 +94,7 @@ size_t ringbuf_push(ringbuf_t *rb, const char *buf, size_t bufsize) {
 
 size_t ringbuf_pop(ringbuf_t *rb, char *buf, size_t bufsize) {
     size_t remaining = ringbuf_remaining(rb);
-    if (bufsize < remaining) {
-        rb->head = (rb->head + remaining - bufsize) & rb->mask;
-        return ringbuf_read(rb, buf, bufsize);
-    }
-    return ringbuf_read(rb, buf, remaining);
+    return ringbuf_read(rb, buf, min(bufsize, remaining));
 }
 
 void ringbuf_flush(ringbuf_t *rb) {

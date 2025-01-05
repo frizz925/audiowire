@@ -22,8 +22,8 @@ int main() {
     for (int i = 0; i < 3; i++)
         assert(ringbuf_push(rb, sample, sz_sample) == sz_sample);
     assert(ringbuf_size(rb) == capacity);
-    assert(ringbuf_pop(rb, buf, sz_sample) == sz_sample);
-    assert(memcmp(buf, sample, sz_sample) == 0);
+    assert(ringbuf_pop(rb, buf, sz_buf) == capacity);
+    assert(memcmp(buf + capacity - sz_sample, sample, sz_sample) == 0);
 
     // Test for flush function
     ringbuf_flush(rb);
