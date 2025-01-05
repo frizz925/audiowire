@@ -81,7 +81,7 @@ pub fn start_record(name: Option<&str>) -> Result<RecordStream> {
     let mut handle: *mut aw_stream = ptr::null_mut();
     let result = unsafe {
         let cname = name.map(|s| CString::new(s).unwrap());
-        let name_ptr = cname.map(|s| s.as_ptr()).unwrap_or(ptr::null());
+        let name_ptr = cname.as_ref().map(|s| s.as_ptr()).unwrap_or(ptr::null());
         aw_start_record(&mut handle, name_ptr)
     };
     parse_result_lazy(result, || RecordStream {
@@ -118,7 +118,7 @@ pub fn start_playback(name: Option<&str>) -> Result<PlaybackStream> {
     let mut handle: *mut aw_stream = ptr::null_mut();
     let result = unsafe {
         let cname = name.map(|s| CString::new(s).unwrap());
-        let name_ptr = cname.map(|s| s.as_ptr()).unwrap_or(ptr::null());
+        let name_ptr = cname.as_ref().map(|s| s.as_ptr()).unwrap_or(ptr::null());
         aw_start_playback(&mut handle, name_ptr)
     };
     parse_result_lazy(result, || PlaybackStream {
