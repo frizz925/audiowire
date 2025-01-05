@@ -1,26 +1,29 @@
 #include "audiowire.h"
 #include "internals.h"
+#include "ringbuf.h"
 
-#include <assert.h>
 #include <portaudio.h>
 #include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
 
-#define PA_FRAMES_PER_BUFFER (PACKET_DURATION_MS * CHANNELS * SAMPLE_RATE / 1000)
-#define audio_bufsize(count) (CHANNELS * SAMPLE_SIZE * count)
-
 #if FORMAT_TYPE == FORMAT_S16
 #define PA_SAMPLE_FORMAT paInt16
 #endif
 
+#define PA_FRAMES_PER_BUFFER (PACKET_DURATION_MS * CHANNELS * SAMPLE_RATE / 1000)
+
+#define audio_bufsize(count) (CHANNELS * SAMPLE_SIZE * count)
+
 struct aw_stream {
     PaStream *handle;
-    aw_stream_read_callback_t *read_cb;
-    aw_stream_write_callback_t *write_cb;
+    ringbuf_t *ringbuf;
     const char *devname;
-    void *userdata;
 };
+
+static inline bool device_is_valid(const PaDeviceInfo *info, bool is_input) {
+    return (is_input && info->maxInputChannels >= CHANNELS) || (!is_input && info->maxOutputChannels >= CHANNELS);
+}
 
 static int on_stream_read(const void *input,
                           void *output,
@@ -29,14 +32,8 @@ static int on_stream_read(const void *input,
                           PaStreamCallbackFlags flags,
                           void *userdata) {
     aw_stream_t *stream = (aw_stream_t *)userdata;
-    switch (stream->read_cb(input, audio_bufsize(count), stream->userdata)) {
-    case AW_STREAM_STOP:
-        return paComplete;
-    case AW_STREAM_ABORT:
-        return paAbort;
-    default:
-        return paContinue;
-    }
+    ringbuf_push(stream->ringbuf, input, audio_bufsize(count));
+    return paContinue;
 }
 
 static int on_stream_write(const void *input,
@@ -46,37 +43,35 @@ static int on_stream_write(const void *input,
                            PaStreamCallbackFlags flags,
                            void *userdata) {
     aw_stream_t *stream = (aw_stream_t *)userdata;
-    switch (stream->write_cb(output, audio_bufsize(count), stream->userdata)) {
-    case AW_STREAM_STOP:
-        return paComplete;
-    case AW_STREAM_ABORT:
-        return paAbort;
-    default:
-        return paContinue;
+    size_t offset = 0;
+    size_t bufsize = audio_bufsize(count);
+    size_t size = ringbuf_size(stream->ringbuf);
+    if (size < bufsize) {
+        offset = bufsize - size;
+        memset(output, 0, offset);
+    } else if (size > bufsize) {
+        size = bufsize;
     }
+    ringbuf_pop(stream->ringbuf, output + offset, size);
+    return paContinue;
 }
 
-static aw_result_t start_stream(aw_stream_t **s, const char *name, void *callback, void *userdata, bool is_input) {
-    assert(callback != NULL);
-
+static aw_result_t start_stream(aw_stream_t **s, const char *name, bool is_input) {
     const char *message = NULL;
     PaError err = paNoError;
 
-    aw_stream_t *stream = malloc(sizeof(aw_stream_t));
-    stream->userdata = userdata;
-    if (is_input)
-        stream->read_cb = (aw_stream_read_callback_t *)callback;
-    else
-        stream->write_cb = (aw_stream_write_callback_t *)callback;
+    aw_stream_t *stream = calloc(1, sizeof(aw_stream_t));
+    stream->ringbuf = ringbuf_create(RINGBUF_SIZE);
 
     PaDeviceIndex device = is_input ? Pa_GetDefaultInputDevice() : Pa_GetDefaultOutputDevice();
-    if (name != NULL) {
+    const PaDeviceInfo *info = Pa_GetDeviceInfo(device);
+    if (name != NULL || !device_is_valid(info, is_input)) {
         device = paNoDevice;
         for (PaDeviceIndex idx = 0; idx < Pa_GetDeviceCount(); idx++) {
-            const PaDeviceInfo *info = Pa_GetDeviceInfo(idx);
+            info = Pa_GetDeviceInfo(idx);
             if (!strstr(info->name, name))
                 continue;
-            if ((is_input && info->maxInputChannels < CHANNELS) || (!is_input && info->maxOutputChannels < CHANNELS))
+            if (!device_is_valid(info, is_input))
                 continue;
             device = idx;
             break;
@@ -87,8 +82,6 @@ static aw_result_t start_stream(aw_stream_t **s, const char *name, void *callbac
         message = "Device not found";
         goto error;
     }
-
-    const PaDeviceInfo *info = Pa_GetDeviceInfo(device);
     stream->devname = info->name;
 
     PaStreamParameters params = {
@@ -127,14 +120,20 @@ aw_result_t aw_initialize() {
     return err ? aw_result(err, Pa_GetErrorText(err)) : aw_result_no_error;
 }
 
-aw_result_t
-aw_start_record(aw_stream_t **stream, const char *name, aw_stream_read_callback_t *callback, void *userdata) {
-    return start_stream(stream, name, callback, userdata, true);
+aw_result_t aw_start_record(aw_stream_t **stream, const char *name) {
+    return start_stream(stream, name, true);
 }
 
-aw_result_t
-aw_start_playback(aw_stream_t **stream, const char *name, aw_stream_write_callback_t *callback, void *userdata) {
-    return start_stream(stream, name, callback, userdata, false);
+aw_result_t aw_start_playback(aw_stream_t **stream, const char *name) {
+    return start_stream(stream, name, false);
+}
+
+size_t aw_record_read(aw_stream_t *stream, char *buf, size_t bufsize) {
+    return ringbuf_pop(stream->ringbuf, buf, bufsize);
+}
+
+size_t aw_playback_write(aw_stream_t *stream, const char *buf, size_t bufsize) {
+    return ringbuf_push(stream->ringbuf, buf, bufsize);
 }
 
 const char *aw_device_name(aw_stream_t *stream) {
@@ -142,13 +141,15 @@ const char *aw_device_name(aw_stream_t *stream) {
 }
 
 aw_result_t aw_stop(aw_stream_t *stream) {
-    PaError err = paNoError;
-    if (Pa_IsStreamActive(stream->handle)) {
-        if ((err = Pa_StopStream(stream->handle)))
+    if (stream->handle) {
+        PaError err = paNoError;
+        if (Pa_IsStreamActive(stream->handle)) {
+            if ((err = Pa_StopStream(stream->handle)))
+                return aw_result(err, Pa_GetErrorText(err));
+        }
+        if ((err = Pa_CloseStream(stream->handle)))
             return aw_result(err, Pa_GetErrorText(err));
     }
-    if ((err = Pa_CloseStream(stream->handle)))
-        return aw_result(err, Pa_GetErrorText(err));
     free(stream);
     return aw_result_no_error;
 }

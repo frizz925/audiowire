@@ -11,9 +11,9 @@ typedef struct aw_result {
     const char *message;
 } aw_result_t;
 
-aw_result_t aw_result_no_error = {0};
+static aw_result_t aw_result_no_error = {0};
 
-aw_result_t aw_result(int code, const char *message) {
+static inline aw_result_t aw_result(int code, const char *message) {
     aw_result_t result = {code, message};
     return result;
 }
@@ -27,13 +27,12 @@ typedef enum aw_stream_callback_result {
     AW_STREAM_ABORT,
 } aw_stream_callback_result_t;
 
-typedef int aw_stream_read_callback_t(const char *data, size_t bufsize, void *userdata);
-typedef int aw_stream_write_callback_t(char *data, size_t bufsize, void *userdata);
-
 aw_result_t aw_initialize();
-aw_result_t aw_start_record(aw_stream_t **stream, const char *name, aw_stream_read_callback_t *callback, void *userdata);
-aw_result_t aw_start_playback(aw_stream_t **stream, const char *name, aw_stream_write_callback_t *callback, void *userdata);
-const char* aw_device_name(aw_stream_t *stream);
+aw_result_t aw_start_record(aw_stream_t **stream, const char *name);
+aw_result_t aw_start_playback(aw_stream_t **stream, const char *name);
+size_t aw_record_read(aw_stream_t *stream, char *buf, size_t bufsize);
+size_t aw_playback_write(aw_stream_t *stream, const char *buf, size_t bufsize);
+const char *aw_device_name(aw_stream_t *stream);
 aw_result_t aw_stop(aw_stream_t *stream);
 aw_result_t aw_terminate();
 
