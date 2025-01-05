@@ -41,7 +41,7 @@ ringbuf_test = executable(
     link_with: lib,
 )
 
-install_headers('include/audiowire.h', 'include/ringbuf.h', subdir: 'audiowire')
+install_headers('include/audiowire.h')
 
 test('ringbuf test', ringbuf_test)
 test('audiowire test', audiowire_test)
