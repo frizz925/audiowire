@@ -25,7 +25,7 @@ static int on_stream_read(const void *input,
                           PaStreamCallbackFlags flags,
                           void *userdata) {
     aw_stream_t *stream = (aw_stream_t *)userdata;
-    ringbuf_push(stream->ringbuf, input, frames_bufsize(&stream->config, count));
+    ringbuf_push(stream->ringbuf, input, count * frame_size(&stream->config));
     return paContinue;
 }
 
@@ -37,7 +37,7 @@ static int on_stream_write(const void *input,
                            void *userdata) {
     aw_stream_t *stream = (aw_stream_t *)userdata;
     size_t offset = 0;
-    size_t bufsize = frames_bufsize(&stream->config, count);
+    size_t bufsize = count * frame_size(&stream->config);
     size_t size = ringbuf_size(stream->ringbuf);
     if (size < bufsize) {
         offset = bufsize - size;
