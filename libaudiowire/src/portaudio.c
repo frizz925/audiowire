@@ -132,6 +132,10 @@ aw_result_t aw_start_playback(aw_stream_t **stream, const char *name, aw_config_
     return start_stream(stream, name, cfg, false);
 }
 
+size_t aw_record_peek(aw_stream_t *stream) {
+    return ringbuf_size(stream->ringbuf);
+}
+
 size_t aw_record_read(aw_stream_t *stream, char *buf, size_t bufsize) {
     return ringbuf_pop(stream->ringbuf, buf, bufsize);
 }
