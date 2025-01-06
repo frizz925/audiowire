@@ -27,22 +27,32 @@ mod tests {
         unsafe {
             let mut record: *mut aw_stream = ptr::null_mut();
             let mut playback: *mut aw_stream = ptr::null_mut();
+            let config = aw_config {
+                channels: 2,
+                sample_rate: 48000,
+                sample_format: aw_sample_format_AW_SAMPLE_FORMAT_S16,
+                buffer_duration: 20,
+            };
 
             assert_aw_result(aw_initialize());
-            assert_aw_result(aw_start_record(&mut record, ptr::null()));
-            assert_aw_result(aw_start_playback(&mut playback, ptr::null()));
+            assert_aw_result(aw_start_record(&mut record, ptr::null(), config));
+            assert_aw_result(aw_start_playback(&mut playback, ptr::null(), config));
 
             assert!(!aw_device_name(record).is_null());
             assert!(!aw_device_name(playback).is_null());
 
-            sleep(Duration::from_secs(1));
-
             let mut buf_arr = [0u8; 65536];
             let bufsize = buf_arr.len();
             let buf = buf_arr.as_mut_ptr() as *mut c_char;
-            let read = aw_record_read(record, buf, bufsize);
-            assert!(read > 0);
-            assert_eq!(aw_playback_write(playback, buf, read), read);
+
+            loop {
+                sleep(Duration::from_millis(20));
+                let read = aw_record_read(record, buf, bufsize);
+                if read > 0 {
+                    assert_eq!(aw_playback_write(playback, buf, read), read);
+                    break;
+                }
+            }
 
             assert_aw_result(aw_stop(playback));
             assert_aw_result(aw_stop(record));
