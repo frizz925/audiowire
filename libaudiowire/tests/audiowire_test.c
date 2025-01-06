@@ -21,11 +21,15 @@ int main() {
     assert(aw_device_name(record) != NULL);
     assert(aw_device_name(playback) != NULL);
 
-    sleep(1);
-    size_t read = aw_record_read(record, buf, bufsize);
-    assert(read > 0);
-    size_t write = aw_playback_write(playback, buf, read);
-    assert(read == write);
+    size_t read = 0;
+    while (read <= 0) {
+      usleep(20 * 1000);
+      read = aw_record_read(record, buf, bufsize);
+      if (read > 0) {
+        size_t write = aw_playback_write(playback, buf, read);
+        assert(read == write);
+      }
+    }
 
     assert_aw_result(aw_stop(playback));
     assert_aw_result(aw_stop(record));
