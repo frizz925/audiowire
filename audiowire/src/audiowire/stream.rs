@@ -5,7 +5,19 @@ use std::{
 
 use audiowire_sys::*;
 
+use super::config::Config;
 use super::result::{parse_result_lazy, Result};
+
+impl Into<aw_config> for Config {
+    fn into(self) -> aw_config {
+        aw_config {
+            channels: self.channels,
+            sample_rate: self.sample_rate,
+            sample_format: self.sample_format as u32,
+            buffer_duration: self.buffer_duration.as_millis() as u32,
+        }
+    }
+}
 
 pub struct BaseStream {
     handle: *mut aw_stream,
@@ -57,6 +69,10 @@ pub struct RecordStream {
 }
 
 impl RecordStream {
+    pub fn peek(&self) -> usize {
+        unsafe { aw_record_peek(self.base.handle) }
+    }
+
     pub fn read(&mut self, buf: &mut [u8]) -> usize {
         unsafe { aw_record_read(self.base.handle, buf.as_mut_ptr() as *mut c_char, buf.len()) }
     }
@@ -77,12 +93,12 @@ impl Stream for RecordStream {}
 unsafe impl Sync for RecordStream {}
 unsafe impl Send for RecordStream {}
 
-pub fn start_record(name: Option<&str>) -> Result<RecordStream> {
+pub fn start_record(name: Option<&str>, cfg: Config) -> Result<RecordStream> {
     let mut handle: *mut aw_stream = ptr::null_mut();
     let result = unsafe {
         let cname = name.map(|s| CString::new(s).unwrap());
         let name_ptr = cname.as_ref().map(|s| s.as_ptr()).unwrap_or(ptr::null());
-        aw_start_record(&mut handle, name_ptr)
+        aw_start_record(&mut handle, name_ptr, cfg.into())
     };
     parse_result_lazy(result, || RecordStream {
         base: BaseStream::new(handle),
@@ -114,12 +130,12 @@ impl Stream for PlaybackStream {}
 unsafe impl Sync for PlaybackStream {}
 unsafe impl Send for PlaybackStream {}
 
-pub fn start_playback(name: Option<&str>) -> Result<PlaybackStream> {
+pub fn start_playback(name: Option<&str>, cfg: Config) -> Result<PlaybackStream> {
     let mut handle: *mut aw_stream = ptr::null_mut();
     let result = unsafe {
         let cname = name.map(|s| CString::new(s).unwrap());
         let name_ptr = cname.as_ref().map(|s| s.as_ptr()).unwrap_or(ptr::null());
-        aw_start_playback(&mut handle, name_ptr)
+        aw_start_playback(&mut handle, name_ptr, cfg.into())
     };
     parse_result_lazy(result, || PlaybackStream {
         base: BaseStream::new(handle),

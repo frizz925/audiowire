@@ -1,7 +1,9 @@
 use std::{env, error::Error};
 
-use audiowire::{logging, Stream};
-use slog::{debug, error, info, o, Logger};
+use audiowire::{
+    convert_slice, logging, opus::ChannelsParser, PlaybackStream, Stream, DEFAULT_CONFIG,
+};
+use slog::{error, info, o, Logger};
 use tokio::{
     io::AsyncReadExt,
     net::{TcpListener, TcpStream},
@@ -30,42 +32,52 @@ async fn main() -> Result<()> {
         tokio::spawn(async move {
             handle_client(name_clone, logger.clone(), socket)
                 .await
-                .map_err(|err| error!(logger, "Client erorr: {}", err))
+                .map_err(|err| error!(logger, "Client error: {}", err))
                 .unwrap_or_default()
         });
     }
 }
 
-async fn handle_client(
-    name: Option<String>,
-    root_logger: Logger,
-    mut socket: TcpStream,
-) -> Result<()> {
-    let mut buf = [0u8; 65536];
+async fn handle_client(name: Option<String>, root_logger: Logger, socket: TcpStream) -> Result<()> {
+    let config = DEFAULT_CONFIG;
     let name_str = name.as_ref().map(|s| s.as_str());
-    let mut stream = audiowire::start_playback(name_str)?;
+
+    let channels = config.channels;
+    let decoder = opus::Decoder::new(
+        config.sample_rate,
+        opus::Channels::from_u8(config.channels)?,
+    )?;
+    let mut stream = audiowire::start_playback(name_str, config)?;
     let logger = match stream.device_name() {
         Some(device) => root_logger.new(o!("device" => device)),
         None => root_logger,
     };
-    let mut running = true;
-    while running {
-        match socket.read(&mut buf).await {
-            Ok(read) => {
-                if read > 0 {
-                    debug!(logger, "Read: {}", read);
-                    stream.write(&buf[..read]);
-                } else {
-                    info!(logger, "Client closed connection");
-                    running = false;
-                }
-            }
-            Err(err) => {
-                error!(logger, "Client read error: {}", err);
-                running = false;
-            }
-        }
-    }
+    info!(logger, "Playback started");
+
+    handle_stream(&mut stream, channels as usize, socket, decoder)
+        .await
+        .map_err(|err| error!(logger, "Client stream error: {}", err))
+        .unwrap_or_default();
+
     stream.stop()?;
+    info!(logger, "Playback stopped");
     Ok(())
+}
+
+async fn handle_stream(
+    stream: &mut PlaybackStream,
+    channels: usize,
+    mut socket: TcpStream,
+    mut decoder: opus::Decoder,
+) -> Result<()> {
+    let mut buf = [0i16; 65536];
+    let mut tmp = [0u8; 8192];
+    let (head, tail) = tmp.split_at_mut(2);
+    loop {
+        socket.read_exact(head).await?;
+        let length = u16::from_be_bytes(head.try_into()?) as usize;
+        socket.read_exact(&mut tail[..length]).await?;
+        let fcount = decoder.decode(&tail[..length], &mut buf, false)?;
+        stream.write(convert_slice(&buf, channels * fcount));
+    }
 }
