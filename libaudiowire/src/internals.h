@@ -1,18 +1,19 @@
 #ifndef _INTERNALS_H_
 #define _INTERNALS_H_
 
-#define CHANNELS 2
-#define SAMPLE_RATE 48000
-#define PACKET_DURATION_MS 20
+#include "../include/audiowire.h"
+
+#include <stddef.h>
+
 #define RINGBUF_SIZE 65536
 
-#define FORMAT_S16 0
+static inline size_t frames_per_duration(const aw_config_t *cfg, uint32_t duration) {
+    return cfg->channels * duration;
+}
 
-#define FORMAT_TYPE FORMAT_S16
-
-#if FORMAT_TYPE == FORMAT_S16
-#define SAMPLE_SIZE 2
-#endif
+static inline size_t frames_bufsize(const aw_config_t *cfg, size_t count) {
+    return count * cfg->channels * aw_sample_size(cfg->sample_format);
+}
 
 #define error_result(err, ptr, message) \
     if (ptr != NULL) \

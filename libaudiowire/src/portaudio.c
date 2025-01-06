@@ -1,4 +1,3 @@
-#include "audiowire.h"
 #include "internals.h"
 #include "ringbuf.h"
 
@@ -7,22 +6,16 @@
 #include <stdlib.h>
 #include <string.h>
 
-#if FORMAT_TYPE == FORMAT_S16
-#define PA_SAMPLE_FORMAT paInt16
-#endif
-
-#define PA_FRAMES_PER_BUFFER (PACKET_DURATION_MS * CHANNELS * SAMPLE_RATE / 1000)
-
-#define audio_bufsize(count) (CHANNELS * SAMPLE_SIZE * count)
-
 struct aw_stream {
+    aw_config_t config;
     PaStream *handle;
     ringbuf_t *ringbuf;
     const char *devname;
 };
 
-static inline bool device_is_valid(const PaDeviceInfo *info, bool is_input) {
-    return (is_input && info->maxInputChannels >= CHANNELS) || (!is_input && info->maxOutputChannels >= CHANNELS);
+static inline bool device_is_valid(const aw_config_t *cfg, const PaDeviceInfo *info, bool is_input) {
+    return (is_input && info->maxInputChannels >= cfg->channels) ||
+           (!is_input && info->maxOutputChannels >= cfg->channels);
 }
 
 static int on_stream_read(const void *input,
@@ -32,7 +25,7 @@ static int on_stream_read(const void *input,
                           PaStreamCallbackFlags flags,
                           void *userdata) {
     aw_stream_t *stream = (aw_stream_t *)userdata;
-    ringbuf_push(stream->ringbuf, input, audio_bufsize(count));
+    ringbuf_push(stream->ringbuf, input, frames_bufsize(&stream->config, count));
     return paContinue;
 }
 
@@ -44,7 +37,7 @@ static int on_stream_write(const void *input,
                            void *userdata) {
     aw_stream_t *stream = (aw_stream_t *)userdata;
     size_t offset = 0;
-    size_t bufsize = audio_bufsize(count);
+    size_t bufsize = frames_bufsize(&stream->config, count);
     size_t size = ringbuf_size(stream->ringbuf);
     if (size < bufsize) {
         offset = bufsize - size;
@@ -56,22 +49,23 @@ static int on_stream_write(const void *input,
     return paContinue;
 }
 
-static aw_result_t start_stream(aw_stream_t **s, const char *name, bool is_input) {
+static aw_result_t start_stream(aw_stream_t **s, const char *name, aw_config_t cfg, bool is_input) {
     const char *message = NULL;
     PaError err = paNoError;
 
     aw_stream_t *stream = calloc(1, sizeof(aw_stream_t));
+    stream->config = cfg;
     stream->ringbuf = ringbuf_create(RINGBUF_SIZE);
 
     PaDeviceIndex device = is_input ? Pa_GetDefaultInputDevice() : Pa_GetDefaultOutputDevice();
     const PaDeviceInfo *info = Pa_GetDeviceInfo(device);
-    if (name != NULL || !device_is_valid(info, is_input)) {
+    if (name != NULL || !device_is_valid(&cfg, info, is_input)) {
         device = paNoDevice;
         for (PaDeviceIndex idx = 0; idx < Pa_GetDeviceCount(); idx++) {
             info = Pa_GetDeviceInfo(idx);
             if (!strstr(info->name, name))
                 continue;
-            if (!device_is_valid(info, is_input))
+            if (!device_is_valid(&cfg, info, is_input))
                 continue;
             device = idx;
             break;
@@ -84,18 +78,28 @@ static aw_result_t start_stream(aw_stream_t **s, const char *name, bool is_input
     }
     stream->devname = info->name;
 
+    PaSampleFormat format;
+    switch (cfg.sample_format) {
+    case AW_SAMPLE_FORMAT_S16:
+        format = paInt16;
+        break;
+    case AW_SAMPLE_FORMAT_F32:
+        format = paFloat32;
+        break;
+    }
+
     PaStreamParameters params = {
         .device = device,
-        .channelCount = CHANNELS,
-        .sampleFormat = PA_SAMPLE_FORMAT,
+        .channelCount = cfg.channels,
+        .sampleFormat = format,
         .suggestedLatency = is_input ? info->defaultLowInputLatency : info->defaultLowOutputLatency,
         .hostApiSpecificStreamInfo = 0,
     };
     err = Pa_OpenStream(&stream->handle,
                         is_input ? &params : NULL,
                         is_input ? NULL : &params,
-                        SAMPLE_RATE,
-                        PA_FRAMES_PER_BUFFER,
+                        cfg.sample_rate,
+                        frames_per_duration(&cfg, cfg.buffer_duration),
                         paClipOff,
                         is_input ? on_stream_read : on_stream_write,
                         stream);
@@ -105,7 +109,7 @@ static aw_result_t start_stream(aw_stream_t **s, const char *name, bool is_input
         goto pa_error;
 
     *s = stream;
-    return aw_result_no_error;
+    return AW_RESULT_NO_ERROR;
 
 pa_error:
     message = Pa_GetErrorText(err);
@@ -117,15 +121,15 @@ error:
 
 aw_result_t aw_initialize() {
     PaError err = Pa_Initialize();
-    return err ? aw_result(err, Pa_GetErrorText(err)) : aw_result_no_error;
+    return err ? aw_result(err, Pa_GetErrorText(err)) : AW_RESULT_NO_ERROR;
 }
 
-aw_result_t aw_start_record(aw_stream_t **stream, const char *name) {
-    return start_stream(stream, name, true);
+aw_result_t aw_start_record(aw_stream_t **stream, const char *name, aw_config_t cfg) {
+    return start_stream(stream, name, cfg, true);
 }
 
-aw_result_t aw_start_playback(aw_stream_t **stream, const char *name) {
-    return start_stream(stream, name, false);
+aw_result_t aw_start_playback(aw_stream_t **stream, const char *name, aw_config_t cfg) {
+    return start_stream(stream, name, cfg, false);
 }
 
 size_t aw_record_read(aw_stream_t *stream, char *buf, size_t bufsize) {
@@ -151,10 +155,10 @@ aw_result_t aw_stop(aw_stream_t *stream) {
             return aw_result(err, Pa_GetErrorText(err));
     }
     free(stream);
-    return aw_result_no_error;
+    return AW_RESULT_NO_ERROR;
 }
 
 aw_result_t aw_terminate() {
     PaError err = Pa_Terminate();
-    return err ? aw_result(err, Pa_GetErrorText(err)) : aw_result_no_error;
+    return err ? aw_result(err, Pa_GetErrorText(err)) : AW_RESULT_NO_ERROR;
 }
