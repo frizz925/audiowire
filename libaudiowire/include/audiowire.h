@@ -11,13 +11,6 @@ typedef struct aw_result {
     const char *message;
 } aw_result_t;
 
-static inline aw_result_t aw_result(int code, const char *message) {
-    aw_result_t result = {code, message};
-    return result;
-}
-
-#define AW_RESULT_NO_ERROR aw_result(0, NULL)
-
 #define aw_result_is_ok(res) (res.code == 0)
 #define aw_result_is_err(res) (res.code != 0)
 
@@ -26,14 +19,7 @@ typedef enum aw_sample_format {
     AW_SAMPLE_FORMAT_F32,
 } aw_sample_format_t;
 
-static inline size_t aw_sample_size(aw_sample_format_t format) {
-    switch (format) {
-    case AW_SAMPLE_FORMAT_S16:
-        return sizeof(uint16_t);
-    case AW_SAMPLE_FORMAT_F32:
-        return sizeof(float);
-    }
-}
+size_t aw_sample_size(aw_sample_format_t format);
 
 typedef struct aw_config {
     uint8_t channels;

@@ -2,7 +2,7 @@ project('libaudiowire', 'c', version: '0.1.0')
 
 compiler = meson.get_compiler('c')
 
-src = ['src/ringbuf.c']
+src = ['src/common.c', 'src/ringbuf.c']
 inc = include_directories('include')
 test_deps = []
 deps = []
