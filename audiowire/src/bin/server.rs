@@ -11,13 +11,18 @@ type Result<T> = std::result::Result<T, Box<dyn Error>>;
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    audiowire::initialize()?;
+    let result = run().await;
+    audiowire::terminate()?;
+    result
+}
+
+async fn run() -> Result<()> {
     let config = DEFAULT_CONFIG;
     let root_logger = logging::term_logger();
     let mut args = env::args();
     let output_name = args.nth(1);
     let input_name = args.next();
-
-    audiowire::initialize()?;
 
     let listener = TcpListener::bind("0.0.0.0:8760").await?;
     info!(
