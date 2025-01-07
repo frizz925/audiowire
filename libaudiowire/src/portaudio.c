@@ -1,6 +1,7 @@
 #include "internals.h"
 #include "ringbuf.h"
 
+#include <assert.h>
 #include <portaudio.h>
 #include <stdbool.h>
 #include <stdlib.h>
@@ -50,12 +51,15 @@ static int on_stream_write(const void *input,
 }
 
 static aw_result_t start_stream(aw_stream_t **s, const char *name, aw_config_t cfg, bool is_input) {
+    assert(cfg.max_buffer_duration >= cfg.buffer_duration);
+    assert(cfg.max_buffer_duration < MAX_BUFFER_DURATION_MS);
+
     const char *message = NULL;
     PaError err = paNoError;
 
     aw_stream_t *stream = calloc(1, sizeof(aw_stream_t));
     stream->config = cfg;
-    stream->ringbuf = ringbuf_create(RINGBUF_SIZE);
+    stream->ringbuf = ringbuf_create(size_per_duration(&cfg, cfg.max_buffer_duration));
 
     PaDeviceIndex device = is_input ? Pa_GetDefaultInputDevice() : Pa_GetDefaultOutputDevice();
     const PaDeviceInfo *info = Pa_GetDeviceInfo(device);
@@ -100,7 +104,7 @@ static aw_result_t start_stream(aw_stream_t **s, const char *name, aw_config_t c
                         is_input ? NULL : &params,
                         cfg.sample_rate,
                         frames_per_duration(&cfg, cfg.buffer_duration),
-                        paClipOff,
+                        paNoFlag,
                         is_input ? on_stream_read : on_stream_write,
                         stream);
     if (err)

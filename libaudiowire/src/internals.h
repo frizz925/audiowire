@@ -5,7 +5,7 @@
 
 #include <stddef.h>
 
-#define RINGBUF_SIZE 65536
+#define MAX_BUFFER_DURATION_MS 10000
 
 // Sample is a single unit of value, eg. u16 or f32.
 // Frame is a collection of samples from all channels.
@@ -19,6 +19,10 @@ static inline size_t frames_per_duration(const aw_config_t *cfg, uint32_t durati
 
 static inline size_t frame_size(const aw_config_t *cfg) {
     return cfg->channels * aw_sample_size(cfg->sample_format);
+}
+
+static inline size_t size_per_duration(const aw_config_t *cfg, uint32_t duration) {
+    return frame_size(cfg) * frames_per_duration(cfg, duration);
 }
 
 #define error_result(err, ptr, message) \

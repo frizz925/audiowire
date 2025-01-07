@@ -26,6 +26,7 @@ typedef struct aw_config {
     uint32_t sample_rate;
     aw_sample_format_t sample_format;
     uint32_t buffer_duration;
+    uint32_t max_buffer_duration;
 } aw_config_t;
 
 aw_result_t aw_initialize();
