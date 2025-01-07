@@ -16,11 +16,13 @@ impl SampleFormat {
     }
 }
 
+#[derive(Clone, Copy)]
 pub struct Config {
     pub channels: u8,
     pub sample_rate: u32,
     pub sample_format: SampleFormat,
     pub buffer_duration: Duration,
+    pub max_buffer_duration: Duration,
 }
 
 impl Config {

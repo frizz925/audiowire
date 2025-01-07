@@ -15,6 +15,7 @@ impl Into<aw_config> for Config {
             sample_rate: self.sample_rate,
             sample_format: self.sample_format as u32,
             buffer_duration: self.buffer_duration.as_millis() as u32,
+            max_buffer_duration: self.max_buffer_duration.as_millis() as u32,
         }
     }
 }

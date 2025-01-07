@@ -32,6 +32,7 @@ mod tests {
                 sample_rate: 48000,
                 sample_format: aw_sample_format_AW_SAMPLE_FORMAT_S16,
                 buffer_duration: 20,
+                max_buffer_duration: 60,
             };
 
             assert_aw_result(aw_initialize());
