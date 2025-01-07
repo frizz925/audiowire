@@ -27,6 +27,7 @@ async fn init(addr: String, mut args: env::Args) -> Result<(), Box<dyn Error>> {
     let logger = logging::term_logger();
 
     audiowire::initialize()?;
+    // TODO: Run audio device check before connecting to server
     let result = run(&addr, config, logger, input_name, output_name).await;
     audiowire::terminate()?;
     result
