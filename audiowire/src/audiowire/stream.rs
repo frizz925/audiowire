@@ -54,6 +54,8 @@ pub trait Stream: StreamInternal {
         self.base().devname.clone()
     }
 
+    fn peek(&self) -> usize;
+
     // Stop is idempotent
     fn stop(&mut self) -> Result<()> {
         let base = self.base_mut();
@@ -70,10 +72,6 @@ pub struct RecordStream {
 }
 
 impl RecordStream {
-    pub fn peek(&self) -> usize {
-        unsafe { aw_record_peek(self.base.handle) }
-    }
-
     pub fn read(&mut self, buf: &mut [u8]) -> usize {
         unsafe { aw_record_read(self.base.handle, buf.as_mut_ptr() as *mut c_char, buf.len()) }
     }
@@ -89,7 +87,11 @@ impl StreamInternal for RecordStream {
     }
 }
 
-impl Stream for RecordStream {}
+impl Stream for RecordStream {
+    fn peek(&self) -> usize {
+        unsafe { aw_record_peek(self.base.handle) }
+    }
+}
 
 unsafe impl Sync for RecordStream {}
 unsafe impl Send for RecordStream {}
@@ -126,7 +128,11 @@ impl StreamInternal for PlaybackStream {
     }
 }
 
-impl Stream for PlaybackStream {}
+impl Stream for PlaybackStream {
+    fn peek(&self) -> usize {
+        unsafe { aw_playback_peek(self.base.handle) }
+    }
+}
 
 unsafe impl Sync for PlaybackStream {}
 unsafe impl Send for PlaybackStream {}

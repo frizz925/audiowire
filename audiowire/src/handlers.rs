@@ -59,7 +59,11 @@ async fn handle_playback_stream(
         let data = &mut tail[..length];
         socket.read_exact(data).await?;
         let fcount = decoder.decode(data, &mut buf, false)?;
-        stream.write(convert_slice(&buf, channels * fcount));
+
+        let data = convert_slice(&buf, channels * fcount);
+        if stream.peek() >= data.len() {
+            stream.write(data);
+        }
     }
 }
 
