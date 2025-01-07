@@ -14,18 +14,6 @@ struct ringbuf {
     atomic_size_t tail;
 };
 
-static inline size_t ringbuf_available(ringbuf_t *rb) {
-    if (rb->head > rb->tail)
-        return rb->head - rb->tail - 1;
-    return rb->capacity - rb->tail + rb->head - 1;
-}
-
-static inline size_t ringbuf_remaining(ringbuf_t *rb) {
-    if (rb->head <= rb->tail)
-        return rb->tail - rb->head;
-    return rb->capacity - rb->head + rb->tail;
-}
-
 static size_t ringbuf_write(ringbuf_t *rb, const char *buf, size_t bufsize) {
     size_t tail = rb->tail;
     size_t offset = 0;
@@ -70,29 +58,36 @@ ringbuf_t *ringbuf_create(size_t cap) {
 
 // We return the mask value because that's how much data that can be written
 // into the ring buffer instead of the internal capacity value.
-size_t ringbuf_capacity(ringbuf_t *rb) {
+inline size_t ringbuf_capacity(ringbuf_t *rb) {
     return rb->mask;
 }
 
-// Size is how much data that can be read from the ring buffer.
-size_t ringbuf_size(ringbuf_t *rb) {
-    return ringbuf_remaining(rb);
+inline size_t ringbuf_available(ringbuf_t *rb) {
+    if (rb->head > rb->tail)
+        return rb->head - rb->tail - 1;
+    return rb->capacity - rb->tail + rb->head - 1;
 }
 
-size_t ringbuf_push(ringbuf_t *rb, const char *buf, size_t bufsize) {
+inline size_t ringbuf_remaining(ringbuf_t *rb) {
+    if (rb->head <= rb->tail)
+        return rb->tail - rb->head;
+    return rb->capacity - rb->head + rb->tail;
+}
+
+inline size_t ringbuf_push(ringbuf_t *rb, const char *buf, size_t bufsize) {
     size_t available = ringbuf_available(rb);
     return ringbuf_write(rb, buf, min(bufsize, available));
 }
 
-size_t ringbuf_pop(ringbuf_t *rb, char *buf, size_t bufsize) {
+inline size_t ringbuf_pop(ringbuf_t *rb, char *buf, size_t bufsize) {
     size_t remaining = ringbuf_remaining(rb);
     return ringbuf_read(rb, buf, min(bufsize, remaining));
 }
 
-void ringbuf_flush(ringbuf_t *rb) {
+inline void ringbuf_flush(ringbuf_t *rb) {
     rb->head = rb->tail = 0;
 }
 
-void ringbuf_free(ringbuf_t *rb) {
+inline void ringbuf_free(ringbuf_t *rb) {
     free(rb);
 }

@@ -26,7 +26,9 @@ static int on_stream_read(const void *input,
                           PaStreamCallbackFlags flags,
                           void *userdata) {
     aw_stream_t *stream = (aw_stream_t *)userdata;
-    ringbuf_push(stream->ringbuf, input, count * frame_size(&stream->config));
+    size_t bufsize = count * frame_size(&stream->config);
+    if (ringbuf_available(stream->ringbuf) >= bufsize)
+        ringbuf_push(stream->ringbuf, input, bufsize);
     return paContinue;
 }
 
@@ -37,16 +39,11 @@ static int on_stream_write(const void *input,
                            PaStreamCallbackFlags flags,
                            void *userdata) {
     aw_stream_t *stream = (aw_stream_t *)userdata;
-    size_t offset = 0;
     size_t bufsize = count * frame_size(&stream->config);
-    size_t size = ringbuf_size(stream->ringbuf);
-    if (size < bufsize) {
-        offset = bufsize - size;
-        memset(output, 0, offset);
-    } else if (size > bufsize) {
-        size = bufsize;
-    }
-    ringbuf_pop(stream->ringbuf, output + offset, size);
+    if (ringbuf_remaining(stream->ringbuf) >= bufsize)
+        ringbuf_pop(stream->ringbuf, output, bufsize);
+    else
+        memset(output, 0, bufsize);
     return paContinue;
 }
 
@@ -137,11 +134,15 @@ aw_result_t aw_start_playback(aw_stream_t **stream, const char *name, aw_config_
 }
 
 size_t aw_record_peek(aw_stream_t *stream) {
-    return ringbuf_size(stream->ringbuf);
+    return ringbuf_remaining(stream->ringbuf);
 }
 
 size_t aw_record_read(aw_stream_t *stream, char *buf, size_t bufsize) {
     return ringbuf_pop(stream->ringbuf, buf, bufsize);
+}
+
+size_t aw_playback_peek(aw_stream_t *stream) {
+    return ringbuf_available(stream->ringbuf);
 }
 
 size_t aw_playback_write(aw_stream_t *stream, const char *buf, size_t bufsize) {

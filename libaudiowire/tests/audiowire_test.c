@@ -35,12 +35,12 @@ int main() {
 
     size_t read = 0;
     while (read <= 0) {
-        usleep(20 * 1000);
         read = aw_record_read(record, buf, bufsize);
         if (read > 0) {
             size_t write = aw_playback_write(playback, buf, read);
             assert(read == write);
         }
+        usleep(20 * 1000);
     }
 
     assert_aw_result(aw_stop(playback));

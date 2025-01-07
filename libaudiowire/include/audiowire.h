@@ -34,6 +34,7 @@ aw_result_t aw_start_record(aw_stream_t **stream, const char *name, aw_config_t 
 aw_result_t aw_start_playback(aw_stream_t **stream, const char *name, aw_config_t cfg);
 size_t aw_record_peek(aw_stream_t *stream);
 size_t aw_record_read(aw_stream_t *stream, char *buf, size_t bufsize);
+size_t aw_playback_peek(aw_stream_t *stream);
 size_t aw_playback_write(aw_stream_t *stream, const char *buf, size_t bufsize);
 const char *aw_device_name(aw_stream_t *stream);
 aw_result_t aw_stop(aw_stream_t *stream);
