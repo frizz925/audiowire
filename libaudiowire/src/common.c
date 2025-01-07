@@ -7,4 +7,5 @@ size_t aw_sample_size(aw_sample_format_t format) {
     case AW_SAMPLE_FORMAT_F32:
         return sizeof(float);
     }
+    return 0;
 }
