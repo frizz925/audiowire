@@ -13,5 +13,5 @@ pub const DEFAULT_CONFIG: Config = Config {
     sample_rate: 48000,
     sample_format: SampleFormat::S16,
     buffer_duration: Duration::from_millis(20),
-    max_buffer_duration: Duration::from_millis(60),
+    max_buffer_duration: Duration::from_millis(40),
 };
