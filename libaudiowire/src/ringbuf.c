@@ -26,7 +26,7 @@ static inline size_t ringbuf_remaining(ringbuf_t *rb) {
     return rb->capacity - rb->head + rb->tail;
 }
 
-static void ringbuf_write(ringbuf_t *rb, const char *buf, size_t bufsize) {
+static size_t ringbuf_write(ringbuf_t *rb, const char *buf, size_t bufsize) {
     size_t tail = rb->tail;
     size_t offset = 0;
     while (offset < bufsize) {
@@ -37,6 +37,7 @@ static void ringbuf_write(ringbuf_t *rb, const char *buf, size_t bufsize) {
         rb->tail = tail = (tail + length) & rb->mask;
         offset += length;
     }
+    return bufsize;
 }
 
 static size_t ringbuf_read(ringbuf_t *rb, char *buf, size_t bufsize) {
@@ -80,16 +81,7 @@ size_t ringbuf_size(ringbuf_t *rb) {
 
 size_t ringbuf_push(ringbuf_t *rb, const char *buf, size_t bufsize) {
     size_t available = ringbuf_available(rb);
-    if (bufsize >= rb->mask) {
-        memcpy(rb->data, buf + bufsize - rb->mask, rb->mask);
-        rb->head = 0;
-        rb->tail = rb->mask;
-    } else {
-        ringbuf_write(rb, buf, bufsize);
-        if (bufsize > available)
-            rb->head = (rb->head + bufsize - available) & rb->mask;
-    }
-    return bufsize;
+    return ringbuf_write(rb, buf, min(bufsize, available));
 }
 
 size_t ringbuf_pop(ringbuf_t *rb, char *buf, size_t bufsize) {
