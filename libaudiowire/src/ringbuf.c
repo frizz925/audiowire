@@ -75,8 +75,21 @@ inline size_t ringbuf_remaining(ringbuf_t *rb) {
 }
 
 inline size_t ringbuf_push(ringbuf_t *rb, const char *buf, size_t bufsize) {
+    size_t capacity = ringbuf_capacity(rb);
     size_t available = ringbuf_available(rb);
-    return ringbuf_write(rb, buf, min(bufsize, available));
+    if (bufsize >= capacity) {
+        rb->tail = 0;
+        rb->head = 1;
+        size_t offset = bufsize - capacity;
+        memcpy(rb->data + 1, buf + offset, capacity);
+    } else {
+        if (bufsize > available) {
+            size_t offset = bufsize - available;
+            rb->head = (rb->head + offset) & rb->mask;
+        }
+        ringbuf_write(rb, buf, bufsize);
+    }
+    return bufsize;
 }
 
 inline size_t ringbuf_pop(ringbuf_t *rb, char *buf, size_t bufsize) {
