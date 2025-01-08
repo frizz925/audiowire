@@ -54,7 +54,7 @@ impl Config {
 
     #[inline]
     fn frame_count_to_duration(&self, count: usize) -> Duration {
-        let ms = count * (self.sample_rate / 1000) as usize;
+        let ms = count * 1000 / (self.sample_rate as usize);
         Duration::from_millis(ms as u64)
     }
 }
