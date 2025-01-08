@@ -5,7 +5,7 @@
 
 #include <stddef.h>
 
-#define MAX_BUFFER_DURATION_MS 10000
+#define MAX_BUFFER_FRAMES 65536
 
 // Sample is a single unit of value, eg. u16 or f32.
 // Frame is a collection of samples from all channels.
@@ -13,16 +13,12 @@
 // Frames per duration is a collection of frames within a certain duration.
 // eg. 20ms duration with 48k sample rate contains 960 frames
 
-static inline size_t frames_per_duration(const aw_config_t *cfg, uint32_t duration) {
-    return (cfg->sample_rate / 1000) * duration;
-}
-
 static inline size_t frame_size(const aw_config_t *cfg) {
     return cfg->channels * aw_sample_size(cfg->sample_format);
 }
 
-static inline size_t size_per_duration(const aw_config_t *cfg, uint32_t duration) {
-    return frame_size(cfg) * frames_per_duration(cfg, duration);
+static inline size_t frame_buffer_size(const aw_config_t *cfg, size_t count) {
+    return count * frame_size(cfg);
 }
 
 #define error_result(err, ptr, message) \

@@ -55,15 +55,17 @@ static inline void free_stream(aw_stream_t *stream) {
 }
 
 static aw_result_t start_stream(aw_stream_t **s, const char *name, aw_config_t cfg, bool is_input) {
-    assert(cfg.max_buffer_duration >= cfg.buffer_duration);
-    assert(cfg.max_buffer_duration < MAX_BUFFER_DURATION_MS);
+    assert(cfg.buffer_frames > 0);
+    assert(cfg.max_buffer_frames > 0);
+    assert(cfg.max_buffer_frames >= cfg.buffer_frames);
+    assert(cfg.max_buffer_frames <= MAX_BUFFER_FRAMES);
 
     const char *message = NULL;
     PaError err = paNoError;
 
     aw_stream_t *stream = calloc(1, sizeof(aw_stream_t));
     stream->config = cfg;
-    stream->max_bufsize = size_per_duration(&cfg, cfg.max_buffer_duration);
+    stream->max_bufsize = frame_buffer_size(&cfg, cfg.max_buffer_frames);
     stream->ringbuf = ringbuf_create(stream->max_bufsize);
 
     PaDeviceIndex device = is_input ? Pa_GetDefaultInputDevice() : Pa_GetDefaultOutputDevice();
@@ -108,7 +110,7 @@ static aw_result_t start_stream(aw_stream_t **s, const char *name, aw_config_t c
                         is_input ? &params : NULL,
                         is_input ? NULL : &params,
                         cfg.sample_rate,
-                        frames_per_duration(&cfg, cfg.buffer_duration),
+                        cfg.buffer_frames,
                         paNoFlag,
                         is_input ? on_stream_read : on_stream_write,
                         stream);

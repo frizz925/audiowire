@@ -8,8 +8,8 @@
 #define CHANNELS 2
 #define SAMPLE_RATE 48000
 #define SAMPLE_FORMAT AW_SAMPLE_FORMAT_S16
-#define PACKET_DURATION_MS 20
-#define BUFFER_DURATION_MS 300
+#define PACKET_FRAME_SIZE 960
+#define BUFFER_FRAME_SIZE 5760
 #define AUDIO_BUFSIZE 65536
 
 #define assert_aw_result(res) assert(aw_result_is_ok(res))
@@ -21,8 +21,8 @@ int main() {
         .channels = CHANNELS,
         .sample_rate = SAMPLE_RATE,
         .sample_format = SAMPLE_FORMAT,
-        .buffer_duration = PACKET_DURATION_MS,
-        .max_buffer_duration = BUFFER_DURATION_MS,
+        .buffer_frames = PACKET_FRAME_SIZE,
+        .max_buffer_frames = BUFFER_FRAME_SIZE,
     };
     size_t bufsize = sizeof(buf);
 
