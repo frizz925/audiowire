@@ -8,18 +8,6 @@ use audiowire_sys::*;
 use super::config::Config;
 use super::result::{parse_result_lazy, Result};
 
-impl Into<aw_config> for Config {
-    fn into(self) -> aw_config {
-        aw_config {
-            channels: self.channels,
-            sample_rate: self.sample_rate,
-            sample_format: self.sample_format as u32,
-            buffer_duration: self.buffer_duration.as_millis() as u32,
-            max_buffer_duration: self.max_buffer_duration.as_millis() as u32,
-        }
-    }
-}
-
 pub struct BaseStream {
     handle: *mut aw_stream,
     devname: Option<String>,
