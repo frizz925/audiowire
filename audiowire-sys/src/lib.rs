@@ -31,8 +31,8 @@ mod tests {
                 channels: 2,
                 sample_rate: 48000,
                 sample_format: aw_sample_format_AW_SAMPLE_FORMAT_S16,
-                buffer_duration: 20,
-                max_buffer_duration: 60,
+                buffer_frames: 960,
+                max_buffer_frames: 1920,
             };
 
             assert_aw_result(aw_initialize());
