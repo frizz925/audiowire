@@ -92,9 +92,18 @@ inline size_t ringbuf_push(ringbuf_t *rb, const char *buf, size_t bufsize) {
     return bufsize;
 }
 
-inline size_t ringbuf_pop(ringbuf_t *rb, char *buf, size_t bufsize) {
+inline size_t ringbuf_pop_front(ringbuf_t *rb, char *buf, size_t bufsize) {
     size_t remaining = ringbuf_remaining(rb);
     return ringbuf_read(rb, buf, min(bufsize, remaining));
+}
+
+inline size_t ringbuf_pop_back(ringbuf_t *rb, char *buf, size_t bufsize) {
+    size_t remaining = ringbuf_remaining(rb);
+    size_t read = min(bufsize, remaining);
+    size_t offset = remaining - read;
+    if (offset > 0)
+        rb->head = (rb->head + offset) & rb->mask;
+    return ringbuf_read(rb, buf, read);
 }
 
 inline void ringbuf_flush(ringbuf_t *rb) {

@@ -41,7 +41,7 @@ static int on_stream_write(const void *input,
     aw_stream_t *stream = (aw_stream_t *)userdata;
     size_t bufsize = count * frame_size(&stream->config);
     if (ringbuf_remaining(stream->ringbuf) >= bufsize)
-        ringbuf_pop(stream->ringbuf, output, bufsize);
+        ringbuf_pop_back(stream->ringbuf, output, bufsize);
     else
         memset(output, 0, bufsize);
     return paContinue;
@@ -148,7 +148,7 @@ size_t aw_record_peek(aw_stream_t *stream) {
 }
 
 size_t aw_record_read(aw_stream_t *stream, char *buf, size_t bufsize) {
-    return ringbuf_pop(stream->ringbuf, buf, bufsize);
+    return ringbuf_pop_back(stream->ringbuf, buf, bufsize);
 }
 
 size_t aw_playback_peek(aw_stream_t *stream) {

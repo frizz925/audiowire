@@ -25,13 +25,22 @@ int main() {
 
     assert(ringbuf_available(rb) == 0);
     assert(ringbuf_remaining(rb) == capacity);
-    assert(ringbuf_pop(rb, buf, sz_buf) == capacity);
+    assert(ringbuf_pop_back(rb, buf, sz_buf) == capacity);
     assert(memcmp(buf + capacity - sz_sample, sample, sz_sample) == 0);
 
     // Test for flush function
     ringbuf_flush(rb);
     assert(ringbuf_available(rb) == capacity);
     assert(ringbuf_remaining(rb) == 0);
+
+    // Test for pop back vs front
+    assert(ringbuf_push(rb, sample, sz_sample) == sz_sample);
+    assert(ringbuf_pop_front(rb, buf, 2) == 2);
+    assert(memcmp(buf, sample, 2) == 0);
+    assert(ringbuf_pop_back(rb, buf, 2) == 2);
+    assert(memcmp(buf, sample + sz_sample - 2, 2) == 0);
+
+    ringbuf_flush(rb);
 
     // Test for overflow truncation
     const char *long_sample = LONG_SAMPLE;
@@ -40,6 +49,6 @@ int main() {
 
     assert(ringbuf_available(rb) == 0);
     assert(ringbuf_remaining(rb) == capacity);
-    assert(ringbuf_pop(rb, buf, sz_buf) == capacity);
+    assert(ringbuf_pop_front(rb, buf, sz_buf) == capacity);
     assert(memcmp(buf, long_sample + sz_long_sample - capacity, capacity) == 0);
 }
