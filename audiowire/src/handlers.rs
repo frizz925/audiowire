@@ -29,10 +29,14 @@ pub async fn handle_playback(
 
     let mut stream = start_playback(name_str, config)?;
     let logger = match stream.device_name() {
-        Some(device) => root_logger.new(o!("device" => device)),
+        Some(device) => root_logger.new(o!("device" => device.to_owned())),
         None => root_logger.new(o!()),
     };
-    info!(logger, "Playback started");
+    info!(
+        logger,
+        "Playback started, buffer capacity: {}",
+        stream.capacity(),
+    );
 
     handle_playback_stream(&mut stream, channels as usize, socket, decoder)
         .await
@@ -84,10 +88,14 @@ pub async fn handle_record(
 
     let mut stream = start_record(name_str, config)?;
     let logger = match stream.device_name() {
-        Some(device) => root_logger.new(o!("device" => device)),
+        Some(device) => root_logger.new(o!("device" => device.to_owned())),
         None => root_logger.new(o!()),
     };
-    info!(logger, "Record started");
+    info!(
+        logger,
+        "Record started, buffer capacity: {}",
+        stream.capacity()
+    );
 
     handle_record_stream(&mut stream, bufsize, interval, socket, encoder)
         .await

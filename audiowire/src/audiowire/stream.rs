@@ -50,8 +50,12 @@ pub trait StreamInternal {
 }
 
 pub trait Stream: StreamInternal {
-    fn device_name(&self) -> Option<String> {
-        self.base().devname.clone()
+    fn capacity(&self) -> usize {
+        unsafe { aw_buffer_capacity(self.base().handle) }
+    }
+
+    fn device_name(&self) -> Option<&str> {
+        self.base().devname.as_deref()
     }
 
     fn peek(&self) -> usize;
