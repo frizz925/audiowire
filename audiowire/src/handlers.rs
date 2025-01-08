@@ -34,8 +34,8 @@ pub async fn handle_playback(
     };
     info!(
         logger,
-        "Playback started, buffer capacity: {}",
-        stream.capacity(),
+        "Playback started, buffer size: {}",
+        config.frame_buffer_size(config.max_buffer_duration),
     );
 
     handle_playback_stream(&mut stream, channels as usize, socket, decoder)
@@ -78,7 +78,7 @@ pub async fn handle_record(
     socket: OwnedWriteHalf,
 ) -> Result<()> {
     let name_str = name.as_ref().map(|s| s.as_str());
-    let bufsize = config.frame_buffer_size();
+    let bufsize = config.frame_buffer_size(config.buffer_duration);
     let interval = config.buffer_duration;
     let encoder = opus::Encoder::new(
         config.sample_rate,
@@ -93,8 +93,8 @@ pub async fn handle_record(
     };
     info!(
         logger,
-        "Record started, buffer capacity: {}",
-        stream.capacity()
+        "Record started, buffer size: {}",
+        config.frame_buffer_size(config.max_buffer_duration),
     );
 
     handle_record_stream(&mut stream, bufsize, interval, socket, encoder)

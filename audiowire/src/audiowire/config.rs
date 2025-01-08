@@ -32,12 +32,12 @@ impl Config {
     }
 
     #[inline]
-    pub fn frame_buffer_count(&self) -> usize {
-        (self.sample_rate / 1000 * (self.buffer_duration.as_millis() as u32)) as usize
+    pub fn frame_buffer_count(&self, duration: Duration) -> usize {
+        (self.sample_rate / 1000 * (duration.as_millis() as u32)) as usize
     }
 
     #[inline]
-    pub fn frame_buffer_size(&self) -> usize {
-        self.frame_buffer_count() * self.frame_size()
+    pub fn frame_buffer_size(&self, duration: Duration) -> usize {
+        self.frame_buffer_count(duration) * self.frame_size()
     }
 }
