@@ -11,5 +11,5 @@ pub const DEFAULT_CONFIG: Config = Config {
     sample_rate: 48000,
     sample_format: SampleFormat::S16,
     buffer_frames: 960,
-    max_buffer_frames: 5760,
+    max_buffer_frames: 14400,
 };
