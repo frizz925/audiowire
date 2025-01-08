@@ -3,7 +3,6 @@
 
 #include <assert.h>
 #include <portaudio.h>
-#include <stdio.h>
 #include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
@@ -50,7 +49,7 @@ static int on_stream_write(const void *input,
 
 static inline void free_stream(aw_stream_t *stream) {
     if (stream->ringbuf)
-      ringbuf_free(stream->ringbuf);
+        ringbuf_free(stream->ringbuf);
     free(stream);
 }
 
@@ -64,7 +63,6 @@ static aw_result_t start_stream(aw_stream_t **s, const char *name, aw_config_t c
     aw_stream_t *stream = calloc(1, sizeof(aw_stream_t));
     stream->config = cfg;
     stream->ringbuf = ringbuf_create(size_per_duration(&cfg, cfg.max_buffer_duration));
-    printf("ringbuf capacity: %zu\n", ringbuf_capacity(stream->ringbuf));
 
     PaDeviceIndex device = is_input ? Pa_GetDefaultInputDevice() : Pa_GetDefaultOutputDevice();
     const PaDeviceInfo *info = Pa_GetDeviceInfo(device);
@@ -139,6 +137,10 @@ aw_result_t aw_start_record(aw_stream_t **stream, const char *name, aw_config_t 
 
 aw_result_t aw_start_playback(aw_stream_t **stream, const char *name, aw_config_t cfg) {
     return start_stream(stream, name, cfg, false);
+}
+
+size_t aw_buffer_capacity(aw_stream_t *stream) {
+    return ringbuf_capacity(stream->ringbuf);
 }
 
 size_t aw_record_peek(aw_stream_t *stream) {

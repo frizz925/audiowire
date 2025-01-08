@@ -32,6 +32,7 @@ typedef struct aw_config {
 aw_result_t aw_initialize();
 aw_result_t aw_start_record(aw_stream_t **stream, const char *name, aw_config_t cfg);
 aw_result_t aw_start_playback(aw_stream_t **stream, const char *name, aw_config_t cfg);
+size_t aw_buffer_capacity(aw_stream_t *stream);
 size_t aw_record_peek(aw_stream_t *stream);
 size_t aw_record_read(aw_stream_t *stream, char *buf, size_t bufsize);
 size_t aw_playback_peek(aw_stream_t *stream);
