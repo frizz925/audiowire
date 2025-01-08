@@ -3,6 +3,7 @@
 
 #include <assert.h>
 #include <portaudio.h>
+#include <stdio.h>
 #include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
@@ -47,6 +48,12 @@ static int on_stream_write(const void *input,
     return paContinue;
 }
 
+static inline void free_stream(aw_stream_t *stream) {
+    if (stream->ringbuf)
+      ringbuf_free(stream->ringbuf);
+    free(stream);
+}
+
 static aw_result_t start_stream(aw_stream_t **s, const char *name, aw_config_t cfg, bool is_input) {
     assert(cfg.max_buffer_duration >= cfg.buffer_duration);
     assert(cfg.max_buffer_duration < MAX_BUFFER_DURATION_MS);
@@ -57,6 +64,7 @@ static aw_result_t start_stream(aw_stream_t **s, const char *name, aw_config_t c
     aw_stream_t *stream = calloc(1, sizeof(aw_stream_t));
     stream->config = cfg;
     stream->ringbuf = ringbuf_create(size_per_duration(&cfg, cfg.max_buffer_duration));
+    printf("ringbuf capacity: %zu\n", ringbuf_capacity(stream->ringbuf));
 
     PaDeviceIndex device = is_input ? Pa_GetDefaultInputDevice() : Pa_GetDefaultOutputDevice();
     const PaDeviceInfo *info = Pa_GetDeviceInfo(device);
@@ -116,7 +124,7 @@ pa_error:
     message = Pa_GetErrorText(err);
 
 error:
-    free(stream);
+    free_stream(stream);
     return aw_result(err, message);
 }
 
@@ -163,7 +171,7 @@ aw_result_t aw_stop(aw_stream_t *stream) {
         if ((err = Pa_CloseStream(stream->handle)))
             return aw_result(err, Pa_GetErrorText(err));
     }
-    free(stream);
+    free_stream(stream);
     return AW_RESULT_NO_ERROR;
 }
 
