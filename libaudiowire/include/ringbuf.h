@@ -13,6 +13,7 @@ size_t ringbuf_remaining(ringbuf_t *rb);
 size_t ringbuf_push(ringbuf_t *rb, const char *buf, size_t bufsize);
 size_t ringbuf_pop_front(ringbuf_t *rb, char *buf, size_t bufsize);
 size_t ringbuf_pop_back(ringbuf_t *rb, char *buf, size_t bufsize);
+size_t ringbuf_pop_back_from(ringbuf_t *rb, char *buf, size_t bufsize, size_t offset);
 void ringbuf_flush(ringbuf_t *rb);
 void ringbuf_free(ringbuf_t *rb);
 

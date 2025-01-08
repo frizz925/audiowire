@@ -74,7 +74,7 @@ inline size_t ringbuf_remaining(ringbuf_t *rb) {
     return rb->capacity - rb->head + rb->tail;
 }
 
-inline size_t ringbuf_push(ringbuf_t *rb, const char *buf, size_t bufsize) {
+size_t ringbuf_push(ringbuf_t *rb, const char *buf, size_t bufsize) {
     size_t capacity = ringbuf_capacity(rb);
     size_t available = ringbuf_available(rb);
     if (bufsize >= capacity) {
@@ -97,13 +97,22 @@ inline size_t ringbuf_pop_front(ringbuf_t *rb, char *buf, size_t bufsize) {
     return ringbuf_read(rb, buf, min(bufsize, remaining));
 }
 
-inline size_t ringbuf_pop_back(ringbuf_t *rb, char *buf, size_t bufsize) {
+size_t ringbuf_pop_back(ringbuf_t *rb, char *buf, size_t bufsize) {
     size_t remaining = ringbuf_remaining(rb);
     size_t read = min(bufsize, remaining);
-    size_t offset = remaining - read;
-    if (offset > 0)
-        rb->head = (rb->head + offset) & rb->mask;
+    size_t diff = remaining - read;
+    if (diff > 0)
+        rb->head = (rb->head + diff) & rb->mask;
     return ringbuf_read(rb, buf, read);
+}
+
+size_t ringbuf_pop_back_from(ringbuf_t *rb, char *buf, size_t bufsize, size_t offset) {
+    size_t remaining = ringbuf_remaining(rb);
+    if (remaining > offset) {
+        size_t diff = remaining - offset;
+        rb->head = (rb->head + diff) & rb->mask;
+    }
+    return ringbuf_read(rb, buf, min(bufsize, remaining));
 }
 
 inline void ringbuf_flush(ringbuf_t *rb) {

@@ -12,6 +12,7 @@ struct aw_stream {
     PaStream *handle;
     ringbuf_t *ringbuf;
     const char *devname;
+    size_t max_bufsize;
 };
 
 static inline bool device_is_valid(const aw_config_t *cfg, const PaDeviceInfo *info, bool is_input) {
@@ -41,7 +42,7 @@ static int on_stream_write(const void *input,
     aw_stream_t *stream = (aw_stream_t *)userdata;
     size_t bufsize = count * frame_size(&stream->config);
     if (ringbuf_remaining(stream->ringbuf) >= bufsize)
-        ringbuf_pop_back(stream->ringbuf, output, bufsize);
+        ringbuf_pop_back_from(stream->ringbuf, output, bufsize, stream->max_bufsize);
     else
         memset(output, 0, bufsize);
     return paContinue;
@@ -62,7 +63,8 @@ static aw_result_t start_stream(aw_stream_t **s, const char *name, aw_config_t c
 
     aw_stream_t *stream = calloc(1, sizeof(aw_stream_t));
     stream->config = cfg;
-    stream->ringbuf = ringbuf_create(size_per_duration(&cfg, cfg.max_buffer_duration));
+    stream->max_bufsize = size_per_duration(&cfg, cfg.max_buffer_duration);
+    stream->ringbuf = ringbuf_create(stream->max_bufsize);
 
     PaDeviceIndex device = is_input ? Pa_GetDefaultInputDevice() : Pa_GetDefaultOutputDevice();
     const PaDeviceInfo *info = Pa_GetDeviceInfo(device);
@@ -148,7 +150,7 @@ size_t aw_record_peek(aw_stream_t *stream) {
 }
 
 size_t aw_record_read(aw_stream_t *stream, char *buf, size_t bufsize) {
-    return ringbuf_pop_back(stream->ringbuf, buf, bufsize);
+    return ringbuf_pop_back_from(stream->ringbuf, buf, bufsize, stream->max_bufsize);
 }
 
 size_t aw_playback_peek(aw_stream_t *stream) {

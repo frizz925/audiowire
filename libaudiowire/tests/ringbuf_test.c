@@ -37,6 +37,8 @@ int main() {
     assert(ringbuf_push(rb, sample, sz_sample) == sz_sample);
     assert(ringbuf_pop_front(rb, buf, 2) == 2);
     assert(memcmp(buf, sample, 2) == 0);
+    assert(ringbuf_pop_back_from(rb, buf, 2, 4) == 2);
+    assert(memcmp(buf, sample + sz_sample - 4, 2) == 0);
     assert(ringbuf_pop_back(rb, buf, 2) == 2);
     assert(memcmp(buf, sample + sz_sample - 2, 2) == 0);
 
