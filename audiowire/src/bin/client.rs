@@ -4,7 +4,7 @@ use audiowire::{
     handlers::{handle_playback, handle_record},
     logging, Config, DEFAULT_CONFIG,
 };
-use slog::{error, info, Logger};
+use slog::{error, info, o, Logger};
 use tokio::{net::TcpStream, time::sleep};
 
 const MAX_RETRY: u8 = 5;
@@ -46,7 +46,7 @@ async fn run(
     let (input, output) = socket.into_split();
 
     let record_handle = {
-        let logger = root_logger.clone();
+        let logger = root_logger.new(o!("stream" => "record"));
         let config_clone = config.clone();
         tokio::spawn(async move {
             handle_record(config_clone, input_name, &logger, output)
@@ -57,7 +57,7 @@ async fn run(
     };
 
     let playback_handle = {
-        let logger = root_logger.clone();
+        let logger = root_logger.new(o!("stream" => "playback"));
         let config_clone = config.clone();
         tokio::spawn(async move {
             handle_playback(config_clone, output_name, &logger, input)
