@@ -3,6 +3,7 @@ mod audiowire;
 pub mod handlers;
 pub mod logging;
 pub mod opus;
+pub mod peer;
 
 pub use audiowire::*;
 

@@ -6,11 +6,11 @@ use super::errors::Error;
 
 pub type Result<T> = std::result::Result<T, Error>;
 
-pub fn parse_result(res: aw_result) -> Result<()> {
+pub(super) fn parse_result(res: aw_result) -> Result<()> {
     parse_result_value(res, ())
 }
 
-pub fn parse_result_value<T>(res: aw_result, value: T) -> Result<T> {
+pub(super) fn parse_result_value<T>(res: aw_result, value: T) -> Result<T> {
     if res.code != 0 {
         Err(Error::new(res.code, res.get_message()))
     } else {
@@ -18,12 +18,12 @@ pub fn parse_result_value<T>(res: aw_result, value: T) -> Result<T> {
     }
 }
 
-pub fn parse_result_lazy<T, F: FnOnce() -> T>(res: aw_result, f: F) -> Result<T> {
+pub(super) fn parse_result_lazy<T, F: FnOnce() -> T>(res: aw_result, f: F) -> Result<T> {
     parse_result(res).map(|_| f())
 }
 
 #[allow(dead_code)]
-pub trait CResult {
+pub(super) trait CResult {
     fn is_ok(&self) -> bool;
     fn is_err(&self) -> bool;
     fn get_message(&self) -> Option<String>;

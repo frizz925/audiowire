@@ -19,7 +19,7 @@ impl Display for Error {
 impl std::error::Error for Error {}
 
 impl Error {
-    pub fn new(code: i32, message: Option<String>) -> Self {
+    pub(super) fn new(code: i32, message: Option<String>) -> Self {
         Self { code, message }
     }
 }
