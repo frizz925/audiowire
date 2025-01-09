@@ -1,5 +1,4 @@
 #include "internals.h"
-#include "ringbuf.h"
 
 #include <assert.h>
 #include <portaudio.h>
@@ -8,11 +7,8 @@
 #include <string.h>
 
 struct aw_stream {
-    aw_config_t config;
+    aw_stream_base_t base;
     PaStream *handle;
-    ringbuf_t *ringbuf;
-    const char *devname;
-    size_t max_bufsize;
 };
 
 static inline bool device_is_valid(const aw_config_t *cfg, const PaDeviceInfo *info, bool is_input) {
@@ -26,7 +22,7 @@ static int on_stream_read(const void *input,
                           const PaStreamCallbackTimeInfo *info,
                           PaStreamCallbackFlags flags,
                           void *userdata) {
-    aw_stream_t *stream = (aw_stream_t *)userdata;
+    aw_stream_base_t *stream = (aw_stream_base_t *)userdata;
     size_t bufsize = count * frame_size(&stream->config);
     if (ringbuf_available(stream->ringbuf) >= bufsize)
         ringbuf_push(stream->ringbuf, input, bufsize);
@@ -39,7 +35,7 @@ static int on_stream_write(const void *input,
                            const PaStreamCallbackTimeInfo *info,
                            PaStreamCallbackFlags flags,
                            void *userdata) {
-    aw_stream_t *stream = (aw_stream_t *)userdata;
+    aw_stream_base_t *stream = (aw_stream_base_t *)userdata;
     size_t bufsize = count * frame_size(&stream->config);
     if (ringbuf_remaining(stream->ringbuf) >= bufsize)
         ringbuf_pop_back_from(stream->ringbuf, output, bufsize, stream->max_bufsize);
@@ -48,10 +44,9 @@ static int on_stream_write(const void *input,
     return paContinue;
 }
 
-static inline void free_stream(aw_stream_t *stream) {
-    if (stream->ringbuf)
-        ringbuf_free(stream->ringbuf);
-    free(stream);
+static inline void free_stream(aw_stream_t *s) {
+    aw_stream_base_deinit(&s->base);
+    free(s);
 }
 
 static aw_result_t start_stream(aw_stream_t **s, const char *name, aw_config_t cfg, bool is_input) {
@@ -60,13 +55,9 @@ static aw_result_t start_stream(aw_stream_t **s, const char *name, aw_config_t c
     assert(cfg.max_buffer_frames >= cfg.buffer_frames);
     assert(cfg.max_buffer_frames <= MAX_BUFFER_FRAMES);
 
+    aw_stream_t *stream = NULL;
     const char *message = NULL;
     PaError err = paNoError;
-
-    aw_stream_t *stream = calloc(1, sizeof(aw_stream_t));
-    stream->config = cfg;
-    stream->max_bufsize = frame_buffer_size(&cfg, cfg.max_buffer_frames);
-    stream->ringbuf = ringbuf_create(stream->max_bufsize);
 
     PaDeviceIndex device = is_input ? Pa_GetDefaultInputDevice() : Pa_GetDefaultOutputDevice();
     const PaDeviceInfo *info = Pa_GetDeviceInfo(device);
@@ -87,7 +78,9 @@ static aw_result_t start_stream(aw_stream_t **s, const char *name, aw_config_t c
         message = "Device not found";
         goto error;
     }
-    stream->devname = info->name;
+
+    stream = calloc(1, sizeof(aw_stream_t));
+    aw_stream_base_init(&stream->base, cfg, info->name);
 
     PaSampleFormat format;
     switch (cfg.sample_format) {
@@ -126,45 +119,22 @@ pa_error:
     message = Pa_GetErrorText(err);
 
 error:
-    free_stream(stream);
+    if (stream)
+        free_stream(stream);
     return aw_result(err, message);
 }
 
-aw_result_t aw_initialize() {
+inline aw_result_t aw_initialize() {
     PaError err = Pa_Initialize();
     return err ? aw_result(err, Pa_GetErrorText(err)) : AW_RESULT_NO_ERROR;
 }
 
-aw_result_t aw_start_record(aw_stream_t **stream, const char *name, aw_config_t cfg) {
+inline aw_result_t aw_start_record(aw_stream_t **stream, const char *name, aw_config_t cfg) {
     return start_stream(stream, name, cfg, true);
 }
 
-aw_result_t aw_start_playback(aw_stream_t **stream, const char *name, aw_config_t cfg) {
+inline aw_result_t aw_start_playback(aw_stream_t **stream, const char *name, aw_config_t cfg) {
     return start_stream(stream, name, cfg, false);
-}
-
-size_t aw_buffer_capacity(aw_stream_t *stream) {
-    return ringbuf_capacity(stream->ringbuf);
-}
-
-size_t aw_record_peek(aw_stream_t *stream) {
-    return ringbuf_remaining(stream->ringbuf);
-}
-
-size_t aw_record_read(aw_stream_t *stream, char *buf, size_t bufsize) {
-    return ringbuf_pop_back_from(stream->ringbuf, buf, bufsize, stream->max_bufsize);
-}
-
-size_t aw_playback_peek(aw_stream_t *stream) {
-    return ringbuf_available(stream->ringbuf);
-}
-
-size_t aw_playback_write(aw_stream_t *stream, const char *buf, size_t bufsize) {
-    return ringbuf_push(stream->ringbuf, buf, bufsize);
-}
-
-const char *aw_device_name(aw_stream_t *stream) {
-    return stream->devname;
 }
 
 aw_result_t aw_stop(aw_stream_t *stream) {
@@ -176,12 +146,13 @@ aw_result_t aw_stop(aw_stream_t *stream) {
         }
         if ((err = Pa_CloseStream(stream->handle)))
             return aw_result(err, Pa_GetErrorText(err));
+        stream->handle = NULL;
     }
     free_stream(stream);
     return AW_RESULT_NO_ERROR;
 }
 
-aw_result_t aw_terminate() {
+inline aw_result_t aw_terminate() {
     PaError err = Pa_Terminate();
     return err ? aw_result(err, Pa_GetErrorText(err)) : AW_RESULT_NO_ERROR;
 }
