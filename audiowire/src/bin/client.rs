@@ -50,9 +50,9 @@ async fn run(
     output_name: Option<String>,
 ) -> Result<(), Box<dyn Error>> {
     let stream_type = if input_name.as_ref().map_or(false, |s| s == "null") {
-        StreamType::Source
-    } else if output_name.as_ref().map_or(false, |s| s == "null") {
         StreamType::Sink
+    } else if output_name.as_ref().map_or(false, |s| s == "null") {
+        StreamType::Source
     } else {
         StreamType::Duplex
     };

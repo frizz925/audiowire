@@ -57,21 +57,6 @@ async fn run() -> Result<()> {
         })
     };
 
-    /*
-    let udp_handle = {
-        let logger = root_logger.new(o!("proto" => "udp"));
-        let output = output_name.clone();
-        let input = input_name.clone();
-        tokio::spawn(async move {
-            listen_udp(config, &logger, output, input)
-                .await
-                .map_err(|e| error!(logger, "Listener error: {}", e))
-                .unwrap_or_default()
-        })
-    };
-    udp_handle.await?;
-    */
-
     tcp_handle.await?;
     Ok(())
 }
@@ -107,67 +92,6 @@ async fn listen_tcp(
         input.read_exact(stream_type_buf).await?;
         let stream_type = StreamType::try_from(stream_type_buf[0])?;
 
-        if [StreamType::Duplex, StreamType::Sink].contains(&stream_type) {
-            let term = Arc::clone(&main_term);
-            let logger = client_logger.new(o!("stream" => "playback"));
-            let name_clone = output_name.clone();
-            tokio::spawn(async move {
-                handle_playback(term, config, name_clone, &logger, input)
-                    .await
-                    .map_err(|err| error!(logger, "Client playback error: {}", err))
-                    .unwrap_or_default()
-            });
-        }
-
-        if [StreamType::Duplex, StreamType::Source].contains(&stream_type) {
-            let term = Arc::clone(&main_term);
-            let logger = client_logger.new(o!("stream" => "record"));
-            let name_clone = input_name.clone();
-            tokio::spawn(async move {
-                handle_record(term, config, name_clone, &logger, output)
-                    .await
-                    .map_err(|err| error!(logger, "Client record error: {}", err))
-                    .unwrap_or_default()
-            });
-        }
-    }
-    info!(root_logger, "Server terminated");
-    Ok(())
-}
-
-// UDP listener is unavailable since using UdpSocket::send_to to a peer that has
-// closed its socket is causing the entire server socket to be unusable.
-#[allow(dead_code)]
-async fn listen_udp(
-    main_term: Arc<AtomicBool>,
-    config: Config,
-    root_logger: &Logger,
-    output_name: Option<String>,
-    input_name: Option<String>,
-) -> Result<()> {
-    let mut buf = [0u8; 8192];
-    let mut producers: HashMap<SocketAddr, UdpPeerProducer> = HashMap::new();
-    let listener = Arc::new(UdpSocket::bind("0.0.0.0:8760").await?);
-    info!(
-        root_logger,
-        "Server listening at {}",
-        listener.local_addr()?
-    );
-    while !main_term.load(Ordering::Relaxed) {
-        let (read, addr) = listener.recv_from(&mut buf).await?;
-        if let Some(prod) = producers.get(&addr) {
-            prod.send(&buf[..read]).await?;
-            continue;
-        }
-
-        let peer = UdpPeer::new(listener.clone(), addr, UDP_BACKLOG);
-        let (input, output, producer) = peer.into_split();
-        let client_logger = root_logger.new(o!("addr" => addr));
-        info!(client_logger, "Client connected");
-
-        let stream_type_buf = &mut buf[..1];
-        let stream_type = StreamType::try_from(stream_type_buf[0])?;
-
         if [StreamType::Duplex, StreamType::Source].contains(&stream_type) {
             let term = Arc::clone(&main_term);
             let logger = client_logger.new(o!("stream" => "playback"));
@@ -191,8 +115,6 @@ async fn listen_udp(
                     .unwrap_or_default()
             });
         }
-
-        producers.insert(addr, producer);
     }
     info!(root_logger, "Server terminated");
     Ok(())
