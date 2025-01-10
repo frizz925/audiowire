@@ -1,4 +1,4 @@
-use std::{env, error::Error, sync::atomic::Ordering, thread::sleep, time::Duration};
+use std::{env, error::Error, sync::atomic::Ordering, thread::sleep};
 
 use audiowire::{
     handlers::handle_signal, initialize, logging::term_logger, start_playback, start_record,
@@ -35,9 +35,15 @@ fn main() -> Result<(), Box<dyn Error>> {
         .unwrap_or_else(|| info!(logger, "Playback started"));
 
     let term = handle_signal()?;
+    let duration = config.buffer_duration();
+    let bufsize = config.buffer_size();
+    let mut buf = [0u8; 65536];
     while !term.load(Ordering::Relaxed) {
-        // Do nothing lmao
-        sleep(Duration::from_secs(1));
+        while record.peek() >= bufsize {
+            let read = record.read(&mut buf[..bufsize]);
+            playback.write(&buf[..read]);
+        }
+        sleep(duration);
     }
 
     record.stop()?;
