@@ -73,10 +73,11 @@ async fn run(
         let logger = root_logger.new(o!("stream" => "record"));
         let config_clone = config.clone();
         let handle = tokio::spawn(async move {
-            handle_record(term, config_clone, input_name, &logger, output)
+            handle_record(Arc::clone(&term), config_clone, input_name, &logger, output)
                 .await
                 .map_err(|err| error!(logger, "Record error: {}", err))
-                .unwrap_or_default()
+                .unwrap_or_default();
+            term.store(true, Ordering::Relaxed);
         });
         handles.push(handle);
     }
@@ -86,10 +87,11 @@ async fn run(
         let logger = root_logger.new(o!("stream" => "playback"));
         let config_clone = config.clone();
         let handle = tokio::spawn(async move {
-            handle_playback(term, config_clone, output_name, &logger, input)
+            handle_playback(Arc::clone(&term), config_clone, output_name, &logger, input)
                 .await
                 .map_err(|err| error!(logger, "Playback error: {}", err))
-                .unwrap_or_default()
+                .unwrap_or_default();
+            term.store(true, Ordering::Relaxed);
         });
         handles.push(handle);
     }
