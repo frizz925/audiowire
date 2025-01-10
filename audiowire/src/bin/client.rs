@@ -72,10 +72,12 @@ async fn run(
     Ok(())
 }
 
-async fn with_retry<T, E: Display, F: Future<Output = Result<T, E>>, G: Fn() -> F>(
-    logger: &Logger,
-    g: G,
-) -> F::Output {
+async fn with_retry<T, E, F, G>(logger: &Logger, g: G) -> F::Output
+where
+    E: Display,
+    F: Future<Output = Result<T, E>>,
+    G: Fn() -> F,
+{
     let mut retry = 0;
     loop {
         let err = match g().await {
