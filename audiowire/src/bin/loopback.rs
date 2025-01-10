@@ -1,9 +1,10 @@
 use std::{env, error::Error, sync::atomic::Ordering, thread::sleep, time::Duration};
 
 use audiowire::{
-    handlers::handle_signal, initialize, start_playback, start_record, terminate, Config,
-    SampleFormat, Stream,
+    handlers::handle_signal, initialize, logging::term_logger, start_playback, start_record,
+    terminate, Config, SampleFormat, Stream,
 };
+use slog::info;
 
 fn main() -> Result<(), Box<dyn Error>> {
     let mut args = env::args();
@@ -19,8 +20,19 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     initialize()?;
 
+    let logger = term_logger();
+
     let mut record = start_record(input.as_deref(), config)?;
+    record
+        .device_name()
+        .map(|s| info!(logger, "Record started, device: {}", s))
+        .unwrap_or_else(|| info!(logger, "Record started"));
+
     let mut playback = start_playback(output.as_deref(), config)?;
+    playback
+        .device_name()
+        .map(|s| info!(logger, "Playback started, device: {}", s))
+        .unwrap_or_else(|| info!(logger, "Playback started"));
 
     let term = handle_signal()?;
     while !term.load(Ordering::Relaxed) {
@@ -29,7 +41,10 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
 
     record.stop()?;
+    info!(logger, "Record stopped");
+
     playback.stop()?;
+    info!(logger, "PLayback stopped");
 
     terminate()?;
 
