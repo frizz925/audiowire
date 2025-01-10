@@ -7,6 +7,7 @@ use std::{
         atomic::{AtomicBool, Ordering},
         Arc,
     },
+    time::Duration,
 };
 
 use audiowire::{
@@ -19,6 +20,7 @@ use slog::{error, info, o, Logger};
 use tokio::{
     io::AsyncReadExt,
     net::{TcpListener, UdpSocket},
+    time::timeout,
 };
 
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
@@ -89,7 +91,14 @@ async fn listen_tcp(
         listener.local_addr()?
     );
     while !main_term.load(Ordering::Relaxed) {
-        let (socket, addr) = listener.accept().await?;
+        let listener_ref = &listener;
+        let future = timeout(Duration::from_secs(1), async move {
+            listener_ref.accept().await
+        });
+        let (socket, addr) = match future.await {
+            Ok(v) => v?,
+            Err(_) => continue,
+        };
         let (mut input, output) = socket.into_split();
         let client_logger = root_logger.new(o!("addr" => addr));
         info!(client_logger, "Client connected");
