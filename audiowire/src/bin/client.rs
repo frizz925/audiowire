@@ -1,8 +1,17 @@
-use std::{env, error::Error, fmt::Display, future::Future, time::Duration};
+use std::{
+    env,
+    error::Error,
+    fmt::Display,
+    future::Future,
+    sync::{atomic::Ordering, Arc},
+    time::Duration,
+};
 
 use audiowire::{
-    handlers::{handle_playback, handle_record},
-    logging, Config, DEFAULT_CONFIG,
+    handlers::{handle_playback, handle_record, handle_signal},
+    logging,
+    peer::PeerWriteHalf,
+    Config, StreamType, DEFAULT_CONFIG,
 };
 use slog::{error, info, o, Logger};
 use tokio::{net::TcpStream, time::sleep};
@@ -40,35 +49,59 @@ async fn run(
     input_name: Option<String>,
     output_name: Option<String>,
 ) -> Result<(), Box<dyn Error>> {
+    let stream_type = if input_name.as_ref().map_or(false, |s| s == "null") {
+        StreamType::Source
+    } else if output_name.as_ref().map_or(false, |s| s == "null") {
+        StreamType::Sink
+    } else {
+        StreamType::Duplex
+    };
+
     let socket = with_retry(&root_logger, || TcpStream::connect(addr)).await?;
 
     info!(root_logger, "Connected to server: {}", socket.peer_addr()?);
-    let (input, output) = socket.into_split();
+    let (input, mut output) = socket.into_split();
 
-    let record_handle = {
+    let stream_type_buf: [u8; 1] = [stream_type.into()];
+    output.write_all(&stream_type_buf).await?;
+
+    let mut handles = Vec::new();
+    let main_term = handle_signal()?;
+
+    if [StreamType::Duplex, StreamType::Source].contains(&stream_type) {
+        let term = Arc::clone(&main_term);
         let logger = root_logger.new(o!("stream" => "record"));
         let config_clone = config.clone();
-        tokio::spawn(async move {
-            handle_record(config_clone, input_name, &logger, output)
+        let handle = tokio::spawn(async move {
+            handle_record(term, config_clone, input_name, &logger, output)
                 .await
                 .map_err(|err| error!(logger, "Record error: {}", err))
                 .unwrap_or_default()
-        })
-    };
+        });
+        handles.push(handle);
+    }
 
-    let playback_handle = {
+    if [StreamType::Duplex, StreamType::Sink].contains(&stream_type) {
+        let term = Arc::clone(&main_term);
         let logger = root_logger.new(o!("stream" => "playback"));
         let config_clone = config.clone();
-        tokio::spawn(async move {
-            handle_playback(config_clone, output_name, &logger, input)
+        let handle = tokio::spawn(async move {
+            handle_playback(term, config_clone, output_name, &logger, input)
                 .await
                 .map_err(|err| error!(logger, "Playback error: {}", err))
                 .unwrap_or_default()
-        })
-    };
+        });
+        handles.push(handle);
+    }
 
-    record_handle.await?;
-    playback_handle.await?;
+    while !main_term.load(Ordering::Relaxed) {
+        // Do nothing lmao
+        sleep(Duration::from_secs(1)).await;
+    }
+
+    for handle in handles {
+        handle.await?;
+    }
     Ok(())
 }
 

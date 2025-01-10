@@ -12,10 +12,12 @@ pub use errors::Error;
 pub use result::Result;
 pub use stream::*;
 
+#[inline]
 pub fn initialize() -> Result<()> {
     parse_result(unsafe { aw_initialize() })
 }
 
+#[inline]
 pub fn terminate() -> Result<()> {
     parse_result(unsafe { aw_terminate() })
 }
