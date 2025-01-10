@@ -1,8 +1,6 @@
 use std::{
-    collections::HashMap,
     env,
     error::Error,
-    net::SocketAddr,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
@@ -12,20 +10,12 @@ use std::{
 
 use audiowire::{
     handlers::{handle_playback, handle_record, handle_signal},
-    logging,
-    peer::{UdpPeer, UdpPeerProducer},
-    Config, StreamType, DEFAULT_CONFIG,
+    logging, Config, StreamType, DEFAULT_CONFIG,
 };
 use slog::{error, info, o, Logger};
-use tokio::{
-    io::AsyncReadExt,
-    net::{TcpListener, UdpSocket},
-    time::timeout,
-};
+use tokio::{io::AsyncReadExt, net::TcpListener, time::timeout};
 
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
-
-const UDP_BACKLOG: usize = 64;
 
 #[tokio::main]
 async fn main() -> Result<()> {
