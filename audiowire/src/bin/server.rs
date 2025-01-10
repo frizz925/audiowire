@@ -48,6 +48,7 @@ async fn run() -> Result<()> {
     };
 
     tcp_handle.await?;
+    info!(root_logger, "Server terminated");
     Ok(())
 }
 
@@ -90,7 +91,7 @@ async fn listen_tcp(
                 handle_playback(term, config, name_clone, &logger, input)
                     .await
                     .map_err(|err| error!(logger, "Client playback error: {}", err))
-                    .unwrap_or_default()
+                    .unwrap_or_default();
             });
         }
 
@@ -106,6 +107,5 @@ async fn listen_tcp(
             });
         }
     }
-    info!(root_logger, "Server terminated");
     Ok(())
 }

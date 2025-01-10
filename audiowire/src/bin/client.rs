@@ -104,6 +104,9 @@ async fn run(
     for handle in handles {
         handle.await?;
     }
+
+    info!(root_logger, "Connection terminated");
+
     Ok(())
 }
 
