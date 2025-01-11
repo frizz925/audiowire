@@ -37,7 +37,8 @@ async fn init(addr: String, mut args: env::Args) -> Result<(), Box<dyn Error>> {
 
     audiowire::initialize()?;
     // TODO: Run audio device check before connecting to server
-    let result = run(&addr, config, logger, input_name, output_name).await;
+    let result = run(&addr, config, &logger, input_name, output_name).await;
+    info!(logger, "Connection terminated");
     audiowire::terminate()?;
     result
 }
@@ -45,7 +46,7 @@ async fn init(addr: String, mut args: env::Args) -> Result<(), Box<dyn Error>> {
 async fn run(
     addr: &str,
     config: Config,
-    root_logger: Logger,
+    root_logger: &Logger,
     input_name: Option<String>,
     output_name: Option<String>,
 ) -> Result<(), Box<dyn Error>> {
@@ -104,8 +105,6 @@ async fn run(
     for handle in handles {
         handle.await?;
     }
-
-    info!(root_logger, "Connection terminated");
 
     Ok(())
 }
