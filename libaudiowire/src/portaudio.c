@@ -3,13 +3,22 @@
 #include <assert.h>
 #include <portaudio.h>
 #include <stdbool.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#ifdef _WIN32
+#define WINDOWS_HOST_API "Windows WASAPI"
+#endif
 
 struct aw_stream {
     aw_stream_base_t base;
     PaStream *handle;
 };
+
+#ifdef _WIN32
+static PaHostApiIndex host_api;
+#endif
 
 static inline bool device_is_valid(const aw_config_t *cfg, const PaDeviceInfo *info, bool is_input) {
     return (is_input && info->maxInputChannels >= cfg->channels) ||
@@ -58,6 +67,10 @@ static aw_result_t start_stream(aw_stream_t **s, const char *devname, aw_config_
         device = paNoDevice;
         for (PaDeviceIndex idx = 0; idx < Pa_GetDeviceCount(); idx++) {
             info = Pa_GetDeviceInfo(idx);
+#ifdef _WIN32
+            if (info->hostApi != host_api)
+                continue;
+#endif
             if (!strstr(info->name, devname))
                 continue;
             if (!device_is_valid(&cfg, info, is_input))
@@ -119,7 +132,24 @@ error:
 
 inline aw_result_t aw_initialize() {
     PaError err = Pa_Initialize();
+
+#ifdef _WIN32
+    if (err)
+        return aw_result(err, Pa_GetErrorText(err));
+
+    host_api = Pa_GetDefaultHostApi();
+    for (PaHostApiIndex idx = 0; idx < Pa_GetHostApiCount(); idx++) {
+        const PaHostApiInfo *info = Pa_GetHostApiInfo(idx);
+        if (strstr(info->name, WINDOWS_HOST_API)) {
+            host_api = idx;
+            break;
+        }
+    }
+
+    return AW_RESULT_NO_ERROR;
+#else
     return err ? aw_result(err, Pa_GetErrorText(err)) : AW_RESULT_NO_ERROR;
+#endif
 }
 
 inline aw_result_t aw_start_record(aw_stream_t **stream, const char *devname, const char *name, aw_config_t cfg,
