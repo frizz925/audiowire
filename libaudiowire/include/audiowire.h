@@ -29,9 +29,13 @@ typedef struct aw_config {
     uint32_t max_buffer_frames;
 } aw_config_t;
 
+typedef void (*aw_error_callback_t)(int err, const char *msg, void *userdata);
+
 aw_result_t aw_initialize();
-aw_result_t aw_start_record(aw_stream_t **stream, const char *name, aw_config_t cfg);
-aw_result_t aw_start_playback(aw_stream_t **stream, const char *name, aw_config_t cfg);
+aw_result_t aw_start_record(aw_stream_t **stream, const char *devname, const char *name, aw_config_t cfg,
+                            aw_error_callback_t error_cb, void *userdata);
+aw_result_t aw_start_playback(aw_stream_t **stream, const char *devname, const char *name, aw_config_t cfg,
+                              aw_error_callback_t error_cb, void *userdata);
 size_t aw_buffer_capacity(aw_stream_t *stream);
 size_t aw_record_peek(aw_stream_t *stream);
 size_t aw_record_read(aw_stream_t *stream, char *buf, size_t bufsize);

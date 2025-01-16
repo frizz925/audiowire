@@ -15,6 +15,8 @@ typedef struct aw_stream_base {
     const char *devname;
     size_t max_bufsize;
     aw_config_t config;
+    aw_error_callback_t error_cb;
+    void *userdata;
 } aw_stream_base_t;
 
 // Sample is a single unit of value, eg. u16 or f32.
@@ -41,11 +43,14 @@ static inline aw_result_t aw_result(int code, const char *message) {
     return result;
 }
 
-static inline void aw_stream_base_init(aw_stream_base_t *base, aw_config_t cfg, const char *devname) {
+static inline void aw_stream_base_init(aw_stream_base_t *base, aw_config_t cfg, const char *devname,
+                                       aw_error_callback_t error_cb, void *userdata) {
     base->max_bufsize = frame_buffer_size(&cfg, cfg.max_buffer_frames);
     base->ringbuf = ringbuf_create(base->max_bufsize);
     base->config = cfg;
     base->devname = devname;
+    base->error_cb = error_cb;
+    base->userdata = userdata;
 }
 
 static inline void aw_stream_base_deinit(aw_stream_base_t *base) {
@@ -55,6 +60,11 @@ static inline void aw_stream_base_deinit(aw_stream_base_t *base) {
     base->devname = NULL;
     base->max_bufsize = 0;
     memset(&base->config, 0, sizeof(aw_config_t));
+}
+
+static inline void aw_stream_base_error(aw_stream_base_t *base, int err, const char *message) {
+    if (base->error_cb)
+        base->error_cb(err, message, base->userdata);
 }
 
 #define AW_RESULT_NO_ERROR aw_result(0, NULL)

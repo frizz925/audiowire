@@ -16,12 +16,8 @@ static inline bool device_is_valid(const aw_config_t *cfg, const PaDeviceInfo *i
            (!is_input && info->maxOutputChannels >= cfg->channels);
 }
 
-static int on_stream_read(const void *input,
-                          void *output,
-                          unsigned long count,
-                          const PaStreamCallbackTimeInfo *info,
-                          PaStreamCallbackFlags flags,
-                          void *userdata) {
+static int on_stream_read(const void *input, void *output, unsigned long count, const PaStreamCallbackTimeInfo *info,
+                          PaStreamCallbackFlags flags, void *userdata) {
     aw_stream_base_t *stream = (aw_stream_base_t *)userdata;
     size_t bufsize = count * frame_size(&stream->config);
     if (ringbuf_available(stream->ringbuf) >= bufsize)
@@ -29,12 +25,8 @@ static int on_stream_read(const void *input,
     return paContinue;
 }
 
-static int on_stream_write(const void *input,
-                           void *output,
-                           unsigned long count,
-                           const PaStreamCallbackTimeInfo *info,
-                           PaStreamCallbackFlags flags,
-                           void *userdata) {
+static int on_stream_write(const void *input, void *output, unsigned long count, const PaStreamCallbackTimeInfo *info,
+                           PaStreamCallbackFlags flags, void *userdata) {
     aw_stream_base_t *stream = (aw_stream_base_t *)userdata;
     size_t bufsize = count * frame_size(&stream->config);
     if (ringbuf_remaining(stream->ringbuf) >= bufsize)
@@ -49,7 +41,8 @@ static inline void free_stream(aw_stream_t *s) {
     free(s);
 }
 
-static aw_result_t start_stream(aw_stream_t **s, const char *name, aw_config_t cfg, bool is_input) {
+static aw_result_t start_stream(aw_stream_t **s, const char *devname, aw_config_t cfg, bool is_input,
+                                aw_error_callback_t error_cb, void *userdata) {
     assert(cfg.buffer_frames > 0);
     assert(cfg.max_buffer_frames > 0);
     assert(cfg.max_buffer_frames >= cfg.buffer_frames);
@@ -61,11 +54,11 @@ static aw_result_t start_stream(aw_stream_t **s, const char *name, aw_config_t c
 
     PaDeviceIndex device = is_input ? Pa_GetDefaultInputDevice() : Pa_GetDefaultOutputDevice();
     const PaDeviceInfo *info = Pa_GetDeviceInfo(device);
-    if (name != NULL || !device_is_valid(&cfg, info, is_input)) {
+    if (devname != NULL || !device_is_valid(&cfg, info, is_input)) {
         device = paNoDevice;
         for (PaDeviceIndex idx = 0; idx < Pa_GetDeviceCount(); idx++) {
             info = Pa_GetDeviceInfo(idx);
-            if (!strstr(info->name, name))
+            if (!strstr(info->name, devname))
                 continue;
             if (!device_is_valid(&cfg, info, is_input))
                 continue;
@@ -80,7 +73,7 @@ static aw_result_t start_stream(aw_stream_t **s, const char *name, aw_config_t c
     }
 
     stream = calloc(1, sizeof(aw_stream_t));
-    aw_stream_base_init(&stream->base, cfg, info->name);
+    aw_stream_base_init(&stream->base, cfg, info->name, error_cb, userdata);
 
     PaSampleFormat format;
     switch (cfg.sample_format) {
@@ -129,12 +122,14 @@ inline aw_result_t aw_initialize() {
     return err ? aw_result(err, Pa_GetErrorText(err)) : AW_RESULT_NO_ERROR;
 }
 
-inline aw_result_t aw_start_record(aw_stream_t **stream, const char *name, aw_config_t cfg) {
-    return start_stream(stream, name, cfg, true);
+inline aw_result_t aw_start_record(aw_stream_t **stream, const char *devname, const char *name, aw_config_t cfg,
+                                   aw_error_callback_t error_cb, void *userdata) {
+    return start_stream(stream, devname, cfg, true, error_cb, userdata);
 }
 
-inline aw_result_t aw_start_playback(aw_stream_t **stream, const char *name, aw_config_t cfg) {
-    return start_stream(stream, name, cfg, false);
+inline aw_result_t aw_start_playback(aw_stream_t **stream, const char *devname, const char *name, aw_config_t cfg,
+                                     aw_error_callback_t error_cb, void *userdata) {
+    return start_stream(stream, devname, cfg, false, error_cb, userdata);
 }
 
 aw_result_t aw_stop(aw_stream_t *stream) {

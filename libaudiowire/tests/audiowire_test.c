@@ -14,6 +14,11 @@
 
 #define assert_aw_result(res) assert(aw_result_is_ok(res))
 
+void on_error(int err, const char *message, void *userdata) {
+    (void)(userdata);
+    printf("Error %d: %s\n", err, message);
+}
+
 int main() {
     char buf[AUDIO_BUFSIZE];
     aw_stream_t *record, *playback;
@@ -27,18 +32,19 @@ int main() {
     size_t bufsize = sizeof(buf);
 
     assert_aw_result(aw_initialize());
-    assert_aw_result(aw_start_record(&record, NULL, config));
-    assert_aw_result(aw_start_playback(&playback, NULL, config));
+    assert_aw_result(aw_start_record(&record, NULL, "record-test", config, on_error, NULL));
+    assert_aw_result(aw_start_playback(&playback, NULL, "playback-test", config, on_error, NULL));
 
     assert(aw_device_name(record) != NULL);
     assert(aw_device_name(playback) != NULL);
 
     size_t read = 0;
-    while (read <= 0) {
+    for (;;) {
         read = aw_record_read(record, buf, bufsize);
         if (read > 0) {
             size_t write = aw_playback_write(playback, buf, read);
             assert(read == write);
+            break;
         }
         usleep(20 * 1000);
     }

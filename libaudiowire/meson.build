@@ -9,16 +9,11 @@ deps = []
 
 host_system = host_machine.system()
 if host_system == 'linux'
-    # src += 'src/pulseaudio.c'
-    # deps += compiler.find_library('pulse', required: true)
-    src += 'src/portaudio.c'
-    deps += compiler.find_library('portaudio', required: true)
+    src += 'src/pulseaudio.c'
+    deps += compiler.find_library('pulse', required: true)
 else
     src += 'src/portaudio.c'
     deps += compiler.find_library('portaudio', required: true)
-endif
-if host_system == 'windows'
-    test_deps += compiler.find_library('ws2_32', required: true)
 endif
 
 lib = library(
@@ -34,7 +29,6 @@ audiowire_test = executable(
     'tests/audiowire_test.c',
     include_directories: inc,
     link_with: lib,
-    dependencies: test_deps,
 )
 ringbuf_test = executable(
     'ringbuf-test',

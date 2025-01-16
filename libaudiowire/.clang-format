@@ -2,6 +2,7 @@ BasedOnStyle: LLVM
 ColumnLimit: 120
 IndentWidth: 4
 AllowShortFunctionsOnASingleLine: Empty
+AllowAllParametersOfDeclarationOnNextLine: false
 BinPackArguments: false
-BinPackParameters: false
+BinPackParameters: true
 AlignEscapedNewlines: DontAlign
