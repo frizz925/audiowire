@@ -1,10 +1,11 @@
+use std::error::Error;
 use std::ffi::c_void;
 use std::ptr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::{error::Error, time::Duration};
 
 use slog::{error, info, o, Logger};
+use tokio::task::JoinHandle;
 use tokio::time::sleep;
 
 use crate::peer::PeerWriteHalf;
@@ -29,15 +30,15 @@ pub fn handle_signal() -> Result<Arc<AtomicBool>> {
     Ok(term)
 }
 
-pub async fn handle_playback<P: PeerReadHalf>(
+pub fn handle_playback<P: PeerReadHalf + Send + 'static>(
     term: Arc<AtomicBool>,
     config: Config,
     device: Option<String>,
     name: String,
-    root_logger: &Logger,
+    root_logger: Logger,
     peer: P,
     opus_enabled: bool,
-) -> Result<()> {
+) -> Result<JoinHandle<()>> {
     let mut stream = start_playback(
         device.as_deref(),
         &name,
@@ -54,30 +55,30 @@ pub async fn handle_playback<P: PeerReadHalf>(
         "Playback started, buffer samples: {}", config.max_buffer_frames
     );
 
-    let result = if opus_enabled {
-        let channels = config.channels;
-        let decoder = opus::Decoder::new(config.sample_rate, opus::Channels::from_u8(channels))?;
-        handle_opus_playback_stream(term, &mut stream, channels as usize, peer, decoder).await
-    } else {
-        let bufsize = config.buffer_size();
-        handle_raw_playback_stream(term, &mut stream, bufsize, peer).await
-    };
+    let handle = tokio::spawn(async move {
+        let result = if opus_enabled {
+            handle_opus_playback_stream(term, &mut stream, config, peer).await
+        } else {
+            handle_raw_playback_stream(term, &mut stream, config, peer).await
+        };
 
-    result
-        .map_err(|err| error!(logger, "Peer stream error: {}", err))
-        .unwrap_or_default();
+        result
+            .map_err(|err| error!(logger, "Playback error: {}", err))
+            .unwrap_or_default();
 
-    stream.stop()?;
-    info!(logger, "Playback stopped");
-    Ok(())
+        info!(logger, "Playback stopped");
+    });
+
+    Ok(handle)
 }
 
 async fn handle_raw_playback_stream<P: PeerReadHalf>(
     term: Arc<AtomicBool>,
     stream: &mut PlaybackStream,
-    bufsize: usize,
+    config: Config,
     mut peer: P,
 ) -> Result<()> {
+    let bufsize = config.buffer_size();
     let mut base = [0u8; 65536];
     let buf = &mut base[..bufsize];
     while !term.load(Ordering::Relaxed) {
@@ -86,16 +87,20 @@ async fn handle_raw_playback_stream<P: PeerReadHalf>(
             stream.write(buf);
         }
     }
+    stream.stop()?;
     Ok(())
 }
 
 async fn handle_opus_playback_stream<P: PeerReadHalf>(
     term: Arc<AtomicBool>,
     stream: &mut PlaybackStream,
-    channels: usize,
+    config: Config,
     mut peer: P,
-    mut decoder: opus::Decoder,
 ) -> Result<()> {
+    let channels = config.channels as usize;
+    let mut decoder =
+        opus::Decoder::new(config.sample_rate, opus::Channels::from_u8(config.channels))?;
+
     let mut buf = [0i16; 65536];
     let mut tmp = [0u8; 8192];
     while !term.load(Ordering::Relaxed) {
@@ -111,19 +116,21 @@ async fn handle_opus_playback_stream<P: PeerReadHalf>(
             stream.write(data);
         }
     }
+
+    stream.stop()?;
     Ok(())
 }
 
-pub async fn handle_record<P: PeerWriteHalf>(
+pub fn handle_record<P: PeerWriteHalf + Send + 'static>(
     term: Arc<AtomicBool>,
     config: Config,
     device: Option<String>,
     name: String,
-    root_logger: &Logger,
+    root_logger: Logger,
     peer: P,
     opus_enabled: bool,
-) -> Result<()> {
-    let mut stream = start_record(
+) -> Result<JoinHandle<()>> {
+    let stream = start_record(
         device.as_deref(),
         &name,
         config.clone(),
@@ -139,35 +146,31 @@ pub async fn handle_record<P: PeerWriteHalf>(
         "Record started, buffer samples: {}", config.max_buffer_frames
     );
 
-    let bufsize = config.buffer_size();
-    let interval = config.buffer_duration();
-    let result = if opus_enabled {
-        let encoder = opus::Encoder::new(
-            config.sample_rate,
-            opus::Channels::from_u8(config.channels),
-            opus::Application::Audio,
-        )?;
-        handle_opus_record_stream(term, &mut stream, bufsize, interval, peer, encoder).await
-    } else {
-        handle_raw_record_stream(term, &mut stream, bufsize, interval, peer).await
-    };
+    let handle = tokio::spawn(async move {
+        let result = if opus_enabled {
+            handle_opus_record_stream(term, stream, config, peer).await
+        } else {
+            handle_raw_record_stream(term, stream, config, peer).await
+        };
 
-    result
-        .map_err(|err| error!(logger, "Peer stream error: {}", err))
-        .unwrap_or_default();
+        result
+            .map_err(|err| error!(logger, "Record error: {}", err))
+            .unwrap_or_default();
 
-    stream.stop()?;
-    info!(logger, "Record stopped");
-    Ok(())
+        info!(logger, "Record stopped");
+    });
+
+    Ok(handle)
 }
 
 async fn handle_raw_record_stream<P: PeerWriteHalf>(
     term: Arc<AtomicBool>,
-    stream: &mut RecordStream,
-    bufsize: usize,
-    interval: Duration,
+    mut stream: RecordStream,
+    config: Config,
     mut peer: P,
 ) -> Result<()> {
+    let bufsize = config.buffer_size();
+    let interval = config.buffer_duration();
     let mut base = [0u8; 65536];
     let buf = &mut base[..bufsize];
     while !term.load(Ordering::Relaxed) {
@@ -177,17 +180,24 @@ async fn handle_raw_record_stream<P: PeerWriteHalf>(
         }
         sleep(interval).await;
     }
+    stream.stop()?;
     Ok(())
 }
 
 async fn handle_opus_record_stream<P: PeerWriteHalf>(
     term: Arc<AtomicBool>,
-    stream: &mut RecordStream,
-    bufsize: usize,
-    interval: Duration,
+    mut stream: RecordStream,
+    config: Config,
     mut peer: P,
-    mut encoder: opus::Encoder,
 ) -> Result<()> {
+    let bufsize = config.buffer_size();
+    let interval = config.buffer_duration();
+    let mut encoder = opus::Encoder::new(
+        config.sample_rate,
+        opus::Channels::from_u8(config.channels),
+        opus::Application::Audio,
+    )?;
+
     let mut tmp = [0u8; 65536];
     let mut buf = [0u8; 8192];
     while !term.load(Ordering::Relaxed) {
@@ -202,6 +212,8 @@ async fn handle_opus_record_stream<P: PeerWriteHalf>(
         }
         sleep(interval).await;
     }
+
+    stream.stop()?;
     Ok(())
 }
 

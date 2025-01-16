@@ -3,7 +3,6 @@
 #include <assert.h>
 #include <portaudio.h>
 #include <stdbool.h>
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -21,6 +20,10 @@ static PaHostApiIndex host_api;
 #endif
 
 static inline bool device_is_valid(const aw_config_t *cfg, const PaDeviceInfo *info, bool is_input) {
+#ifdef _WIN32
+    if (info->hostApi != host_api)
+        return false;
+#endif
     return (is_input && info->maxInputChannels >= cfg->channels) ||
            (!is_input && info->maxOutputChannels >= cfg->channels);
 }
@@ -67,11 +70,7 @@ static aw_result_t start_stream(aw_stream_t **s, const char *devname, aw_config_
         device = paNoDevice;
         for (PaDeviceIndex idx = 0; idx < Pa_GetDeviceCount(); idx++) {
             info = Pa_GetDeviceInfo(idx);
-#ifdef _WIN32
-            if (info->hostApi != host_api)
-                continue;
-#endif
-            if (!strstr(info->name, devname))
+            if (devname && !strstr(info->name, devname))
                 continue;
             if (!device_is_valid(&cfg, info, is_input))
                 continue;

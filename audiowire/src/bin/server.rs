@@ -53,7 +53,7 @@ async fn run() -> Result<()> {
 }
 
 async fn listen_tcp(
-    main_term: Arc<AtomicBool>,
+    term: Arc<AtomicBool>,
     config: Config,
     root_logger: &Logger,
     output_name: Option<String>,
@@ -66,7 +66,7 @@ async fn listen_tcp(
         "Server listening at {}",
         listener.local_addr()?
     );
-    while !main_term.load(Ordering::Relaxed) {
+    while !term.load(Ordering::Relaxed) {
         let listener_ref = &listener;
         let future = timeout(Duration::from_secs(1), async move {
             listener_ref.accept().await
@@ -83,31 +83,30 @@ async fn listen_tcp(
         let flags = StreamFlags::from(buf.as_slice());
         let stream_type = flags.stream_type();
         let opus_enabled = flags.opus_enabled();
+        let stream_logger = client_logger.new(o!("opus" => opus_enabled));
 
         if stream_type.is_source() {
-            let term = Arc::clone(&main_term);
-            let logger = client_logger.new(o!("stream" => "playback"));
-            let device = output_name.clone();
-            let name = addr.to_string();
-            tokio::spawn(async move {
-                handle_playback(term, config, device, name, &logger, input, opus_enabled)
-                    .await
-                    .map_err(|err| error!(logger, "Client playback error: {}", err))
-                    .unwrap_or_default();
-            });
+            handle_playback(
+                Arc::clone(&term),
+                config,
+                output_name.clone(),
+                addr.to_string(),
+                stream_logger.new(o!("stream" => "playback")),
+                input,
+                opus_enabled,
+            )?;
         }
 
         if stream_type.is_sink() {
-            let term = Arc::clone(&main_term);
-            let logger = client_logger.new(o!("stream" => "record"));
-            let device = input_name.clone();
-            let name = addr.to_string();
-            tokio::spawn(async move {
-                handle_record(term, config, device, name, &logger, output, opus_enabled)
-                    .await
-                    .map_err(|err| error!(logger, "Client record error: {}", err))
-                    .unwrap_or_default()
-            });
+            handle_record(
+                Arc::clone(&term),
+                config,
+                input_name.clone(),
+                addr.to_string(),
+                stream_logger.new(o!("stream" => "record")),
+                output,
+                opus_enabled,
+            )?;
         }
     }
     Ok(())

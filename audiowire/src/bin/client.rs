@@ -34,8 +34,11 @@ async fn init(addr: String, mut args: env::Args) -> Result<(), Box<dyn Error>> {
     let input_name = args.next();
     let output_name = args.next();
     let opus_disabled = env::var("OPUS_DISABLED").map(|s| s == "1").unwrap_or(true);
-
     let logger = logging::term_logger();
+
+    if opus_disabled {
+        info!(logger, "Opus codec is disabled");
+    }
 
     audiowire::initialize()?;
     // TODO: Run audio device check before connecting to server
@@ -61,70 +64,55 @@ async fn run(
     output_name: Option<String>,
     opus_disabled: bool,
 ) -> Result<(), Box<dyn Error>> {
-    let stream_type = StreamType::new(input_name.is_some(), output_name.is_some());
+    let stream_type = StreamType::new(
+        input_name.as_ref().map(|s| s != "null").unwrap_or(true),
+        output_name.as_ref().map(|s| s != "null").unwrap_or(true),
+    );
     let stream_flags = StreamFlags::new(stream_type, !opus_disabled);
 
+    info!(root_logger, "Connecting to server: {}", addr);
     let socket = with_retry(&root_logger, || TcpStream::connect(addr)).await?;
     info!(root_logger, "Connected to server: {}", socket.peer_addr()?);
     let (input, mut output) = socket.into_split();
     output.write_all(&stream_flags.to_bytes()).await?;
 
     let mut handles = Vec::new();
-    let main_term = handle_signal()?;
+    let term = handle_signal()?;
 
     if stream_type.is_source() {
-        let term = Arc::clone(&main_term);
-        let logger = root_logger.new(o!("stream" => "record"));
-        let config_clone = config.clone();
-        let name = addr.to_owned();
-        let handle = tokio::spawn(async move {
-            handle_record(
-                Arc::clone(&term),
-                config_clone,
-                input_name,
-                name,
-                &logger,
-                output,
-                !opus_disabled,
-            )
-            .await
-            .map_err(|err| error!(logger, "Record error: {}", err))
-            .unwrap_or_default();
-            term.store(true, Ordering::Relaxed);
-        });
+        let handle = handle_record(
+            Arc::clone(&term),
+            config.clone(),
+            input_name,
+            addr.to_owned(),
+            root_logger.new(o!("stream" => "record")),
+            output,
+            !opus_disabled,
+        )?;
         handles.push(handle);
     }
 
     if stream_type.is_sink() {
-        let term = Arc::clone(&main_term);
-        let logger = root_logger.new(o!("stream" => "playback"));
-        let config_clone = config.clone();
-        let name = addr.to_owned();
-        let handle = tokio::spawn(async move {
-            handle_playback(
-                Arc::clone(&term),
-                config_clone,
-                output_name,
-                name,
-                &logger,
-                input,
-                !opus_disabled,
-            )
-            .await
-            .map_err(|err| error!(logger, "Playback error: {}", err))
-            .unwrap_or_default();
-            term.store(true, Ordering::Relaxed);
-        });
+        let handle = handle_playback(
+            Arc::clone(&term),
+            config.clone(),
+            output_name,
+            addr.to_owned(),
+            root_logger.new(o!("stream" => "playback")),
+            input,
+            !opus_disabled,
+        )?;
         handles.push(handle);
     }
 
-    while !main_term.load(Ordering::Relaxed) {
+    while !term.load(Ordering::Relaxed) {
         // Do nothing lmao
         sleep(Duration::from_secs(1)).await;
     }
 
     for handle in handles {
         handle.await?;
+        term.store(true, Ordering::Relaxed);
     }
 
     Ok(())
