@@ -66,7 +66,11 @@ pub fn handle_playback<P: PeerReadHalf + Send + 'static>(
             .map_err(|err| error!(logger, "Playback error: {}", err))
             .unwrap_or_default();
 
-        info!(logger, "Playback stopped");
+        if let Err(err) = stream.stop() {
+            error!(logger, "Failed to stop playback stream: {}", err);
+        } else {
+            info!(logger, "Playback stopped");
+        }
     });
 
     Ok(handle)
@@ -87,7 +91,6 @@ async fn handle_raw_playback_stream<P: PeerReadHalf>(
             stream.write(buf);
         }
     }
-    stream.stop()?;
     Ok(())
 }
 
@@ -117,7 +120,6 @@ async fn handle_opus_playback_stream<P: PeerReadHalf>(
         }
     }
 
-    stream.stop()?;
     Ok(())
 }
 
@@ -130,7 +132,7 @@ pub fn handle_record<P: PeerWriteHalf + Send + 'static>(
     peer: P,
     opus_enabled: bool,
 ) -> Result<JoinHandle<()>> {
-    let stream = start_record(
+    let mut stream = start_record(
         device.as_deref(),
         &name,
         config.clone(),
@@ -148,16 +150,20 @@ pub fn handle_record<P: PeerWriteHalf + Send + 'static>(
 
     let handle = tokio::spawn(async move {
         let result = if opus_enabled {
-            handle_opus_record_stream(term, stream, config, peer).await
+            handle_opus_record_stream(term, &mut stream, config, peer).await
         } else {
-            handle_raw_record_stream(term, stream, config, peer).await
+            handle_raw_record_stream(term, &mut stream, config, peer).await
         };
 
         result
             .map_err(|err| error!(logger, "Record error: {}", err))
             .unwrap_or_default();
 
-        info!(logger, "Record stopped");
+        if let Err(err) = stream.stop() {
+            error!(logger, "Failed to stop record stream: {}", err);
+        } else {
+            info!(logger, "Record stopped");
+        }
     });
 
     Ok(handle)
@@ -165,7 +171,7 @@ pub fn handle_record<P: PeerWriteHalf + Send + 'static>(
 
 async fn handle_raw_record_stream<P: PeerWriteHalf>(
     term: Arc<AtomicBool>,
-    mut stream: RecordStream,
+    stream: &mut RecordStream,
     config: Config,
     mut peer: P,
 ) -> Result<()> {
@@ -180,13 +186,12 @@ async fn handle_raw_record_stream<P: PeerWriteHalf>(
         }
         sleep(interval).await;
     }
-    stream.stop()?;
     Ok(())
 }
 
 async fn handle_opus_record_stream<P: PeerWriteHalf>(
     term: Arc<AtomicBool>,
-    mut stream: RecordStream,
+    stream: &mut RecordStream,
     config: Config,
     mut peer: P,
 ) -> Result<()> {
@@ -213,7 +218,6 @@ async fn handle_opus_record_stream<P: PeerWriteHalf>(
         sleep(interval).await;
     }
 
-    stream.stop()?;
     Ok(())
 }
 
