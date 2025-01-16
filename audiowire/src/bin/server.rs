@@ -86,9 +86,10 @@ async fn listen_tcp(
         if [StreamType::Duplex, StreamType::Source].contains(&stream_type) {
             let term = Arc::clone(&main_term);
             let logger = client_logger.new(o!("stream" => "playback"));
-            let name_clone = output_name.clone();
+            let device = output_name.clone();
+            let name = addr.to_string();
             tokio::spawn(async move {
-                handle_playback(term, config, name_clone, &logger, input)
+                handle_playback(term, config, device, name, &logger, input)
                     .await
                     .map_err(|err| error!(logger, "Client playback error: {}", err))
                     .unwrap_or_default();
@@ -98,9 +99,10 @@ async fn listen_tcp(
         if [StreamType::Duplex, StreamType::Sink].contains(&stream_type) {
             let term = Arc::clone(&main_term);
             let logger = client_logger.new(o!("stream" => "record"));
-            let name_clone = input_name.clone();
+            let device = input_name.clone();
+            let name = addr.to_string();
             tokio::spawn(async move {
-                handle_record(term, config, name_clone, &logger, output)
+                handle_record(term, config, device, name, &logger, output)
                     .await
                     .map_err(|err| error!(logger, "Client record error: {}", err))
                     .unwrap_or_default()

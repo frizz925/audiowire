@@ -1,3 +1,5 @@
+use std::ffi::c_void;
+use std::ptr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::{error::Error, time::Duration};
@@ -15,6 +17,11 @@ use super::peer::PeerReadHalf;
 
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
 
+fn error_cb(err: i32, message: &str, userdata: *mut c_void) {
+    let logger = unsafe { &ptr::read(userdata as *mut Logger) };
+    error!(logger, "Error {}: {}", err, message);
+}
+
 pub fn handle_signal() -> Result<Arc<AtomicBool>> {
     let term = Arc::new(AtomicBool::new(false));
     signal_hook::flag::register(signal_hook::consts::SIGINT, Arc::clone(&term))?;
@@ -25,18 +32,24 @@ pub fn handle_signal() -> Result<Arc<AtomicBool>> {
 pub async fn handle_playback<P: PeerReadHalf>(
     term: Arc<AtomicBool>,
     config: Config,
-    name: Option<String>,
+    device: Option<String>,
+    name: String,
     root_logger: &Logger,
     peer: P,
 ) -> Result<()> {
-    let name_str = name.as_ref().map(|s| s.as_str());
     let channels = config.channels;
     let decoder = opus::Decoder::new(
         config.sample_rate,
         opus::Channels::from_u8(config.channels)?,
     )?;
 
-    let mut stream = start_playback(name_str, config)?;
+    let mut stream = start_playback(
+        device.as_deref(),
+        &name,
+        config,
+        Some(error_cb),
+        Some(root_logger.clone()),
+    )?;
     let logger = match stream.device_name() {
         Some(device) => root_logger.new(o!("device" => device.to_owned())),
         None => root_logger.new(o!()),
@@ -84,11 +97,11 @@ async fn handle_playback_stream<P: PeerReadHalf>(
 pub async fn handle_record<P: PeerWriteHalf>(
     term: Arc<AtomicBool>,
     config: Config,
-    name: Option<String>,
+    device: Option<String>,
+    name: String,
     root_logger: &Logger,
     peer: P,
 ) -> Result<()> {
-    let name_str = name.as_ref().map(|s| s.as_str());
     let bufsize = config.buffer_size();
     let interval = config.buffer_duration();
     let encoder = opus::Encoder::new(
@@ -97,7 +110,13 @@ pub async fn handle_record<P: PeerWriteHalf>(
         opus::Application::Audio,
     )?;
 
-    let mut stream = start_record(name_str, config)?;
+    let mut stream = start_record(
+        device.as_deref(),
+        &name,
+        config,
+        Some(error_cb),
+        Some(root_logger.clone()),
+    )?;
     let logger = match stream.device_name() {
         Some(device) => root_logger.new(o!("device" => device.to_owned())),
         None => root_logger.new(o!()),

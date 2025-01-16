@@ -1,12 +1,13 @@
 use std::{
-    ffi::{c_char, CStr, CString},
+    ffi::{c_char, c_int, CStr, CString},
+    os::raw::c_void,
     ptr,
 };
 
 use audiowire_sys::*;
 
-use super::config::Config;
 use super::result::{parse_result_lazy, Result};
+use super::{config::Config, result::parse_result_value};
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum StreamType {
@@ -143,15 +144,79 @@ impl Stream for RecordStream {
 unsafe impl Sync for RecordStream {}
 unsafe impl Send for RecordStream {}
 
-pub fn start_record(name: Option<&str>, cfg: Config) -> Result<RecordStream> {
-    let mut handle: *mut aw_stream = ptr::null_mut();
-    let result = unsafe {
-        let cname = name.map(|s| CString::new(s).unwrap());
-        let name_ptr = cname.as_ref().map(|s| s.as_ptr()).unwrap_or(ptr::null());
-        aw_start_record(&mut handle, name_ptr, cfg.into())
+pub type ErrorCallback = fn(err: i32, message: &str, userdata: *mut c_void);
+
+struct ErrorHandle {
+    error_cb: ErrorCallback,
+    userdata: *mut c_void,
+}
+
+unsafe extern "C" fn on_error(err: c_int, message: *const c_char, userdata: *mut c_void) {
+    let handle = &ptr::read(userdata as *mut ErrorHandle);
+    (handle.error_cb)(
+        err as i32,
+        CStr::from_ptr(message).to_str().unwrap_or_default(),
+        handle.userdata,
+    );
+}
+
+type StartStreamFn = unsafe extern "C" fn(
+    stream: *mut *mut aw_stream,
+    devname: *const c_char,
+    name: *const c_char,
+    cfg: aw_config,
+    error_cb: aw_error_callback_t,
+    userdata: *mut c_void,
+) -> aw_result;
+
+unsafe fn start_stream<T>(
+    start_fn: StartStreamFn,
+    device: Option<&str>,
+    name: &str,
+    cfg: Config,
+    error_cb: Option<ErrorCallback>,
+    userdata: Option<T>,
+) -> Result<*mut aw_stream> {
+    let mut stream: *mut aw_stream = ptr::null_mut();
+    let cdev = device.map(|s| CString::new(s).unwrap());
+    let dev_ptr = cdev.as_ref().map(|s| s.as_ptr()).unwrap_or(ptr::null());
+    let cname = CString::new(name).unwrap();
+    let result = if let Some(error_cb) = error_cb {
+        let userdata = userdata
+            .map(|data| Box::into_raw(Box::new(data)) as *mut c_void)
+            .unwrap_or(ptr::null_mut());
+        let handle = Box::into_raw(Box::new(ErrorHandle { error_cb, userdata }));
+        start_fn(
+            &mut stream,
+            dev_ptr,
+            cname.as_ptr(),
+            cfg.into(),
+            Some(on_error),
+            handle as *mut c_void,
+        )
+    } else {
+        start_fn(
+            &mut stream,
+            dev_ptr,
+            cname.as_ptr(),
+            cfg.into(),
+            None,
+            ptr::null_mut(),
+        )
     };
-    parse_result_lazy(result, || RecordStream {
-        base: BaseStream::new(handle),
+    parse_result_value(result, stream)
+}
+
+pub fn start_record<T>(
+    device: Option<&str>,
+    name: &str,
+    cfg: Config,
+    error_cb: Option<ErrorCallback>,
+    userdata: Option<T>,
+) -> Result<RecordStream> {
+    let result = unsafe { start_stream(aw_start_record, device, name, cfg, error_cb, userdata) };
+    result.map(|stream| RecordStream {
+        base: BaseStream::new(stream),
     })
 }
 
@@ -188,14 +253,15 @@ impl Stream for PlaybackStream {
 unsafe impl Sync for PlaybackStream {}
 unsafe impl Send for PlaybackStream {}
 
-pub fn start_playback(name: Option<&str>, cfg: Config) -> Result<PlaybackStream> {
-    let mut handle: *mut aw_stream = ptr::null_mut();
-    let result = unsafe {
-        let cname = name.map(|s| CString::new(s).unwrap());
-        let name_ptr = cname.as_ref().map(|s| s.as_ptr()).unwrap_or(ptr::null());
-        aw_start_playback(&mut handle, name_ptr, cfg.into())
-    };
-    parse_result_lazy(result, || PlaybackStream {
-        base: BaseStream::new(handle),
+pub fn start_playback<T>(
+    device: Option<&str>,
+    name: &str,
+    cfg: Config,
+    error_cb: Option<ErrorCallback>,
+    userdata: Option<T>,
+) -> Result<PlaybackStream> {
+    let result = unsafe { start_stream(aw_start_playback, device, name, cfg, error_cb, userdata) };
+    result.map(|stream| PlaybackStream {
+        base: BaseStream::new(stream),
     })
 }

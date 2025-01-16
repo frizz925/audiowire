@@ -1,10 +1,15 @@
-use std::{env, error::Error, sync::atomic::Ordering, thread::sleep};
+use std::{env, error::Error, ffi::c_void, ptr, sync::atomic::Ordering, thread::sleep};
 
 use audiowire::{
     handlers::handle_signal, initialize, logging::term_logger, start_playback, start_record,
     terminate, Config, SampleFormat, Stream,
 };
-use slog::info;
+use slog::{error, info, Logger};
+
+fn error_cb(err: i32, message: &str, userdata: *mut c_void) {
+    let logger = unsafe { &ptr::read(userdata as *mut Logger) };
+    error!(logger, "Error {}: {}", err, message);
+}
 
 fn main() -> Result<(), Box<dyn Error>> {
     let mut args = env::args();
@@ -22,13 +27,25 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let logger = term_logger();
 
-    let mut record = start_record(input.as_deref(), config)?;
+    let mut record = start_record(
+        input.as_deref(),
+        "Source",
+        config,
+        Some(error_cb),
+        Some(logger.clone()),
+    )?;
     record
         .device_name()
         .map(|s| info!(logger, "Record started, device: {}", s))
         .unwrap_or_else(|| info!(logger, "Record started"));
 
-    let mut playback = start_playback(output.as_deref(), config)?;
+    let mut playback = start_playback(
+        output.as_deref(),
+        "Sink",
+        config,
+        Some(error_cb),
+        Some(logger.clone()),
+    )?;
     playback
         .device_name()
         .map(|s| info!(logger, "Playback started, device: {}", s))
