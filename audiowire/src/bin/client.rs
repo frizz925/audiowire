@@ -105,11 +105,6 @@ async fn run(
         handles.push(handle);
     }
 
-    while !term.load(Ordering::Relaxed) {
-        // Do nothing lmao
-        sleep(Duration::from_secs(1)).await;
-    }
-
     for handle in handles {
         handle.await?;
         term.store(true, Ordering::Relaxed);
