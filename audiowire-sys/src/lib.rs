@@ -7,7 +7,7 @@ include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
 #[cfg(test)]
 mod tests {
     use std::{
-        ffi::{c_char, CStr},
+        ffi::{c_char, c_int, c_void, CStr, CString},
         ptr,
         thread::sleep,
         time::Duration,
@@ -20,6 +20,14 @@ mod tests {
             let message = unsafe { CStr::from_ptr(res.message).to_string_lossy() };
             panic!("Result is error: code={}, message={}", res.code, message)
         }
+    }
+
+    unsafe extern "C" fn on_error(err: c_int, message: *const c_char, _: *mut c_void) {
+        panic!(
+            "Error {}: {}",
+            err,
+            CStr::from_ptr(message).to_string_lossy()
+        );
     }
 
     #[test]
@@ -35,9 +43,26 @@ mod tests {
                 max_buffer_frames: 1920,
             };
 
+            let record_name = CString::new("record-test").unwrap();
+            let playback_name = CString::new("playback-test").unwrap();
+
             assert_aw_result(aw_initialize());
-            assert_aw_result(aw_start_record(&mut record, ptr::null(), config));
-            assert_aw_result(aw_start_playback(&mut playback, ptr::null(), config));
+            assert_aw_result(aw_start_record(
+                &mut record,
+                ptr::null(),
+                record_name.as_ptr(),
+                config,
+                Some(on_error),
+                ptr::null_mut(),
+            ));
+            assert_aw_result(aw_start_playback(
+                &mut playback,
+                ptr::null(),
+                playback_name.as_ptr(),
+                config,
+                Some(on_error),
+                ptr::null_mut(),
+            ));
 
             assert!(!aw_device_name(record).is_null());
             assert!(!aw_device_name(playback).is_null());
