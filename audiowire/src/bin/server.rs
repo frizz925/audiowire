@@ -10,7 +10,7 @@ use std::{
 
 use audiowire::{
     handlers::{handle_playback, handle_record, handle_signal},
-    logging, Config, StreamType, DEFAULT_CONFIG,
+    logging, Config, StreamFlags, DEFAULT_CONFIG,
 };
 use slog::{error, info, o, Logger};
 use tokio::{io::AsyncReadExt, net::TcpListener, time::timeout};
@@ -79,30 +79,31 @@ async fn listen_tcp(
         let client_logger = root_logger.new(o!("addr" => addr));
         info!(client_logger, "Client connected");
 
-        let stream_type_buf = &mut buf[..1];
-        input.read_exact(stream_type_buf).await?;
-        let stream_type = StreamType::try_from(stream_type_buf[0])?;
+        input.read_exact(&mut buf[..1]).await?;
+        let flags = StreamFlags::from(buf.as_slice());
+        let stream_type = flags.stream_type();
+        let opus_enabled = flags.opus_enabled();
 
-        if [StreamType::Duplex, StreamType::Source].contains(&stream_type) {
+        if stream_type.is_source() {
             let term = Arc::clone(&main_term);
             let logger = client_logger.new(o!("stream" => "playback"));
             let device = output_name.clone();
             let name = addr.to_string();
             tokio::spawn(async move {
-                handle_playback(term, config, device, name, &logger, input)
+                handle_playback(term, config, device, name, &logger, input, opus_enabled)
                     .await
                     .map_err(|err| error!(logger, "Client playback error: {}", err))
                     .unwrap_or_default();
             });
         }
 
-        if [StreamType::Duplex, StreamType::Sink].contains(&stream_type) {
+        if stream_type.is_sink() {
             let term = Arc::clone(&main_term);
             let logger = client_logger.new(o!("stream" => "record"));
             let device = input_name.clone();
             let name = addr.to_string();
             tokio::spawn(async move {
-                handle_record(term, config, device, name, &logger, output)
+                handle_record(term, config, device, name, &logger, output, opus_enabled)
                     .await
                     .map_err(|err| error!(logger, "Client record error: {}", err))
                     .unwrap_or_default()

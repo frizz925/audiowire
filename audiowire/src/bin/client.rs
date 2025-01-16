@@ -11,7 +11,7 @@ use audiowire::{
     handlers::{handle_playback, handle_record, handle_signal},
     logging,
     peer::PeerWriteHalf,
-    Config, StreamType, DEFAULT_CONFIG,
+    Config, StreamFlags, StreamType, DEFAULT_CONFIG,
 };
 use slog::{error, info, o, Logger};
 use tokio::{net::TcpStream, time::sleep};
@@ -33,11 +33,21 @@ async fn init(addr: String, mut args: env::Args) -> Result<(), Box<dyn Error>> {
     let config = DEFAULT_CONFIG;
     let input_name = args.next();
     let output_name = args.next();
+    let opus_disabled = env::var("OPUS_DISABLED").map(|s| s == "1").unwrap_or(true);
+
     let logger = logging::term_logger();
 
     audiowire::initialize()?;
     // TODO: Run audio device check before connecting to server
-    let result = run(&addr, config, &logger, input_name, output_name).await;
+    let result = run(
+        &addr,
+        config,
+        &logger,
+        input_name,
+        output_name,
+        opus_disabled,
+    )
+    .await;
     info!(logger, "Connection terminated");
     audiowire::terminate()?;
     result
@@ -49,27 +59,20 @@ async fn run(
     root_logger: &Logger,
     input_name: Option<String>,
     output_name: Option<String>,
+    opus_disabled: bool,
 ) -> Result<(), Box<dyn Error>> {
-    let stream_type = if input_name.as_ref().map_or(false, |s| s == "null") {
-        StreamType::Sink
-    } else if output_name.as_ref().map_or(false, |s| s == "null") {
-        StreamType::Source
-    } else {
-        StreamType::Duplex
-    };
+    let stream_type = StreamType::new(input_name.is_some(), output_name.is_some());
+    let stream_flags = StreamFlags::new(stream_type, !opus_disabled);
 
     let socket = with_retry(&root_logger, || TcpStream::connect(addr)).await?;
-
     info!(root_logger, "Connected to server: {}", socket.peer_addr()?);
     let (input, mut output) = socket.into_split();
-
-    let stream_type_buf: [u8; 1] = [stream_type.into()];
-    output.write_all(&stream_type_buf).await?;
+    output.write_all(&stream_flags.to_bytes()).await?;
 
     let mut handles = Vec::new();
     let main_term = handle_signal()?;
 
-    if [StreamType::Duplex, StreamType::Source].contains(&stream_type) {
+    if stream_type.is_source() {
         let term = Arc::clone(&main_term);
         let logger = root_logger.new(o!("stream" => "record"));
         let config_clone = config.clone();
@@ -82,6 +85,7 @@ async fn run(
                 name,
                 &logger,
                 output,
+                !opus_disabled,
             )
             .await
             .map_err(|err| error!(logger, "Record error: {}", err))
@@ -91,7 +95,7 @@ async fn run(
         handles.push(handle);
     }
 
-    if [StreamType::Duplex, StreamType::Sink].contains(&stream_type) {
+    if stream_type.is_sink() {
         let term = Arc::clone(&main_term);
         let logger = root_logger.new(o!("stream" => "playback"));
         let config_clone = config.clone();
@@ -104,6 +108,7 @@ async fn run(
                 name,
                 &logger,
                 input,
+                !opus_disabled,
             )
             .await
             .map_err(|err| error!(logger, "Playback error: {}", err))
