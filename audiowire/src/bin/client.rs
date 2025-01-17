@@ -33,7 +33,9 @@ async fn init(addr: String, mut args: env::Args) -> Result<(), Box<dyn Error>> {
     let config = DEFAULT_CONFIG;
     let input_name = args.next();
     let output_name = args.next();
-    let opus_disabled = env::var("OPUS_DISABLED").map(|s| s == "1").unwrap_or(false);
+    let opus_disabled = env::var("OPUS_DISABLED")
+        .map(|s| s == "1")
+        .unwrap_or_default();
     let logger = logging::term_logger();
 
     if opus_disabled {
