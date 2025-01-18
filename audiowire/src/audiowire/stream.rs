@@ -33,6 +33,25 @@ impl StreamType {
     pub fn is_sink(self) -> bool {
         self.0 & (1 << 1) != 0
     }
+
+    #[inline]
+    pub fn to_bytes(self) -> [u8; 1] {
+        [self.0]
+    }
+}
+
+impl From<&[u8]> for StreamType {
+    #[inline]
+    fn from(value: &[u8]) -> Self {
+        Self(value[0])
+    }
+}
+
+impl From<[u8; 1]> for StreamType {
+    #[inline]
+    fn from(value: [u8; 1]) -> Self {
+        Self(value[0])
+    }
 }
 
 #[derive(Clone, Copy)]

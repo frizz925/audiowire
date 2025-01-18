@@ -10,7 +10,9 @@ use std::{
 
 use audiowire::{
     handlers::{handle_playback, handle_record, handle_signal},
-    logging, Config, StreamFlags, DEFAULT_CONFIG,
+    logging,
+    peer::PeerWriteHalf,
+    Config, StreamFlags, StreamType, DEFAULT_CONFIG,
 };
 use slog::{error, info, o, Logger};
 use tokio::{io::AsyncReadExt, net::TcpListener, time::timeout};
@@ -49,6 +51,10 @@ async fn listen_tcp(
     output_name: Option<String>,
     input_name: Option<String>,
 ) -> Result<()> {
+    let server_type = StreamType::new(
+        input_name.as_ref().map(|s| s != "null").unwrap_or(true),
+        output_name.as_ref().map(|s| s != "null").unwrap_or(true),
+    );
     let mut buf = [0u8; 16];
     let listener = TcpListener::bind("0.0.0.0:8760").await?;
     info!(
@@ -65,17 +71,19 @@ async fn listen_tcp(
             Ok(v) => v?,
             Err(_) => continue,
         };
-        let (mut input, output) = socket.into_split();
         let client_logger = root_logger.new(o!("addr" => addr));
         info!(client_logger, "Client connected");
 
+        let (mut input, mut output) = socket.into_split();
+        output.write_all(server_type.to_bytes().as_slice()).await?;
         input.read_exact(&mut buf[..1]).await?;
+
         let flags = StreamFlags::from(buf.as_slice());
-        let stream_type = flags.stream_type();
+        let client_type = flags.stream_type();
         let opus_enabled = flags.opus_enabled();
         let stream_logger = client_logger.new(o!("opus" => opus_enabled));
 
-        if stream_type.is_source() {
+        if server_type.is_sink() && client_type.is_source() {
             handle_playback(
                 Arc::clone(&term),
                 config,
@@ -87,7 +95,7 @@ async fn listen_tcp(
             )?;
         }
 
-        if stream_type.is_sink() {
+        if server_type.is_source() && client_type.is_sink() {
             handle_record(
                 Arc::clone(&term),
                 config,

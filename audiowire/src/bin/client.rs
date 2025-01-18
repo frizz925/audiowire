@@ -10,7 +10,7 @@ use std::{
 use audiowire::{
     handlers::{handle_playback, handle_record, handle_signal},
     logging,
-    peer::PeerWriteHalf,
+    peer::{PeerReadHalf, PeerWriteHalf},
     Config, StreamFlags, StreamType, DEFAULT_CONFIG,
 };
 use slog::{error, info, o, Logger};
@@ -66,22 +66,26 @@ async fn run(
     output_name: Option<String>,
     opus_disabled: bool,
 ) -> Result<(), Box<dyn Error>> {
-    let stream_type = StreamType::new(
+    let mut buf = [0u8; 16];
+    let client_type = StreamType::new(
         input_name.as_ref().map(|s| s != "null").unwrap_or(true),
         output_name.as_ref().map(|s| s != "null").unwrap_or(true),
     );
-    let stream_flags = StreamFlags::new(stream_type, !opus_disabled);
+    let stream_flags = StreamFlags::new(client_type, !opus_disabled);
 
     info!(root_logger, "Connecting to server: {}", addr);
     let socket = with_retry(&root_logger, || TcpStream::connect(addr)).await?;
     info!(root_logger, "Connected to server: {}", socket.peer_addr()?);
-    let (input, mut output) = socket.into_split();
+
+    let (mut input, mut output) = socket.into_split();
     output.write_all(&stream_flags.to_bytes()).await?;
+    input.read_exact(&mut buf[..1]).await?;
+    let server_type = StreamType::from(buf.as_slice());
 
     let mut handles = Vec::new();
     let term = handle_signal()?;
 
-    if stream_type.is_source() {
+    if client_type.is_source() && server_type.is_sink() {
         let handle = handle_record(
             Arc::clone(&term),
             config.clone(),
@@ -94,7 +98,7 @@ async fn run(
         handles.push(handle);
     }
 
-    if stream_type.is_sink() {
+    if client_type.is_sink() && server_type.is_source() {
         let handle = handle_playback(
             Arc::clone(&term),
             config.clone(),
