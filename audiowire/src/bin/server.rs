@@ -31,7 +31,7 @@ async fn run() -> Result<()> {
     let input = args.next();
 
     let logger = logging::term_logger();
-    check_audio(&logger, config.clone(), output.as_deref(), input.as_deref())?;
+    check_audio(&logger, config.clone(), input.as_deref(), output.as_deref())?;
     listen_tcp(config, &logger, input, output)
         .await
         .map_err(|e| error!(logger, "Listener error: {}", e))
@@ -43,8 +43,8 @@ async fn run() -> Result<()> {
 async fn listen_tcp(
     config: Config,
     root_logger: &Logger,
-    output_name: Option<String>,
     input_name: Option<String>,
+    output_name: Option<String>,
 ) -> Result<()> {
     let server_type = StreamType::new(
         input_name.as_ref().map(|s| s != "null").unwrap_or(true),
