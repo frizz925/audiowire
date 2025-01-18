@@ -2,6 +2,7 @@
 
 #include <assert.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
@@ -12,7 +13,15 @@
 #define BUFFER_FRAME_SIZE 5760
 #define AUDIO_BUFSIZE 65536
 
-#define assert_aw_result(res) assert(aw_result_is_ok(res))
+#define assert_aw_result(res) check_aw_result(res, __FUNCTION__, __FILE_NAME__, __LINE__, #res)
+
+void check_aw_result(aw_result_t res, const char *function, const char *filename, int line, const char *expr) {
+    if (AW_RESULT_IS_OK(res))
+        return;
+    printf("Result assertion failed in function %s, file %s, line %d: %s\n", function, filename, line, expr);
+    printf("Error %d: %s\n", res.code, res.message);
+    abort();
+}
 
 void on_error(int err, const char *message, void *userdata) {
     (void)(userdata);

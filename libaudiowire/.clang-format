@@ -4,5 +4,5 @@ IndentWidth: 4
 AllowShortFunctionsOnASingleLine: Empty
 AllowAllParametersOfDeclarationOnNextLine: false
 BinPackArguments: false
-BinPackParameters: true
+BinPackParameters: false
 AlignEscapedNewlines: DontAlign

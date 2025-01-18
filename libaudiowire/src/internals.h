@@ -43,8 +43,11 @@ static inline aw_result_t aw_result(int code, const char *message) {
     return result;
 }
 
-static inline void aw_stream_base_init(aw_stream_base_t *base, aw_config_t cfg, const char *devname,
-                                       aw_error_callback_t error_cb, void *userdata) {
+static inline void aw_stream_base_init(aw_stream_base_t *base,
+                                       aw_config_t cfg,
+                                       const char *devname,
+                                       aw_error_callback_t error_cb,
+                                       void *userdata) {
     base->max_bufsize = frame_buffer_size(&cfg, cfg.max_buffer_frames);
     base->ringbuf = ringbuf_create(base->max_bufsize);
     base->config = cfg;

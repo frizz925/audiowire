@@ -28,8 +28,12 @@ static inline bool device_is_valid(const aw_config_t *cfg, const PaDeviceInfo *i
            (!is_input && info->maxOutputChannels >= cfg->channels);
 }
 
-static int on_stream_read(const void *input, void *output, unsigned long count, const PaStreamCallbackTimeInfo *info,
-                          PaStreamCallbackFlags flags, void *userdata) {
+static int on_stream_read(const void *input,
+                          void *output,
+                          unsigned long count,
+                          const PaStreamCallbackTimeInfo *info,
+                          PaStreamCallbackFlags flags,
+                          void *userdata) {
     aw_stream_base_t *stream = (aw_stream_base_t *)userdata;
     size_t bufsize = count * frame_size(&stream->config);
     if (ringbuf_available(stream->ringbuf) >= bufsize)
@@ -37,8 +41,12 @@ static int on_stream_read(const void *input, void *output, unsigned long count, 
     return paContinue;
 }
 
-static int on_stream_write(const void *input, void *output, unsigned long count, const PaStreamCallbackTimeInfo *info,
-                           PaStreamCallbackFlags flags, void *userdata) {
+static int on_stream_write(const void *input,
+                           void *output,
+                           unsigned long count,
+                           const PaStreamCallbackTimeInfo *info,
+                           PaStreamCallbackFlags flags,
+                           void *userdata) {
     aw_stream_base_t *stream = (aw_stream_base_t *)userdata;
     size_t bufsize = count * frame_size(&stream->config);
     if (ringbuf_remaining(stream->ringbuf) >= bufsize)
@@ -53,8 +61,12 @@ static inline void free_stream(aw_stream_t *s) {
     free(s);
 }
 
-static aw_result_t start_stream(aw_stream_t **s, const char *devname, aw_config_t cfg, bool is_input,
-                                aw_error_callback_t error_cb, void *userdata) {
+static aw_result_t start_stream(aw_stream_t **s,
+                                const char *devname,
+                                aw_config_t cfg,
+                                bool is_input,
+                                aw_error_callback_t error_cb,
+                                void *userdata) {
     assert(cfg.buffer_frames > 0);
     assert(cfg.max_buffer_frames > 0);
     assert(cfg.max_buffer_frames >= cfg.buffer_frames);
@@ -151,13 +163,21 @@ inline aw_result_t aw_initialize() {
 #endif
 }
 
-inline aw_result_t aw_start_record(aw_stream_t **stream, const char *devname, const char *name, aw_config_t cfg,
-                                   aw_error_callback_t error_cb, void *userdata) {
+inline aw_result_t aw_start_record(aw_stream_t **stream,
+                                   const char *devname,
+                                   const char *name,
+                                   aw_config_t cfg,
+                                   aw_error_callback_t error_cb,
+                                   void *userdata) {
     return start_stream(stream, devname, cfg, true, error_cb, userdata);
 }
 
-inline aw_result_t aw_start_playback(aw_stream_t **stream, const char *devname, const char *name, aw_config_t cfg,
-                                     aw_error_callback_t error_cb, void *userdata) {
+inline aw_result_t aw_start_playback(aw_stream_t **stream,
+                                     const char *devname,
+                                     const char *name,
+                                     aw_config_t cfg,
+                                     aw_error_callback_t error_cb,
+                                     void *userdata) {
     return start_stream(stream, devname, cfg, false, error_cb, userdata);
 }
 

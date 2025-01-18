@@ -131,8 +131,13 @@ static void free_stream(aw_stream_t *stream) {
     free(stream);
 }
 
-static aw_result_t start_stream(aw_stream_t **s, const char *devname, const char *name, aw_config_t cfg, bool is_input,
-                                aw_error_callback_t error_cb, void *userdata) {
+static aw_result_t start_stream(aw_stream_t **s,
+                                const char *devname,
+                                const char *name,
+                                aw_config_t cfg,
+                                bool is_input,
+                                aw_error_callback_t error_cb,
+                                void *userdata) {
     aw_result_t result = AW_RESULT_NO_ERROR;
     aw_stream_t *stream = calloc(1, sizeof(aw_stream_t));
     aw_stream_base_init(&stream->base, cfg, devname, error_cb, userdata);
@@ -225,13 +230,21 @@ inline aw_result_t aw_initialize() {
     return AW_RESULT_NO_ERROR;
 }
 
-inline aw_result_t aw_start_record(aw_stream_t **stream, const char *devname, const char *name, aw_config_t cfg,
-                                   aw_error_callback_t error_cb, void *userdata) {
+inline aw_result_t aw_start_record(aw_stream_t **stream,
+                                   const char *devname,
+                                   const char *name,
+                                   aw_config_t cfg,
+                                   aw_error_callback_t error_cb,
+                                   void *userdata) {
     return start_stream(stream, devname, name, cfg, true, error_cb, userdata);
 }
 
-inline aw_result_t aw_start_playback(aw_stream_t **stream, const char *devname, const char *name, aw_config_t cfg,
-                                     aw_error_callback_t error_cb, void *userdata) {
+inline aw_result_t aw_start_playback(aw_stream_t **stream,
+                                     const char *devname,
+                                     const char *name,
+                                     aw_config_t cfg,
+                                     aw_error_callback_t error_cb,
+                                     void *userdata) {
     return start_stream(stream, devname, name, cfg, false, error_cb, userdata);
 }
 

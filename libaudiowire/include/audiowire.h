@@ -11,8 +11,8 @@ typedef struct aw_result {
     const char *message;
 } aw_result_t;
 
-#define aw_result_is_ok(res) (res.code == 0)
-#define aw_result_is_err(res) (res.code != 0)
+#define AW_RESULT_IS_OK(res) (res.code == 0)
+#define AW_RESULT_IS_ERR(res) (res.code != 0)
 
 typedef enum aw_sample_format {
     AW_SAMPLE_FORMAT_S16,
@@ -32,10 +32,18 @@ typedef struct aw_config {
 typedef void (*aw_error_callback_t)(int err, const char *msg, void *userdata);
 
 aw_result_t aw_initialize();
-aw_result_t aw_start_record(aw_stream_t **stream, const char *devname, const char *name, aw_config_t cfg,
-                            aw_error_callback_t error_cb, void *userdata);
-aw_result_t aw_start_playback(aw_stream_t **stream, const char *devname, const char *name, aw_config_t cfg,
-                              aw_error_callback_t error_cb, void *userdata);
+aw_result_t aw_start_record(aw_stream_t **stream,
+                            const char *devname,
+                            const char *name,
+                            aw_config_t cfg,
+                            aw_error_callback_t error_cb,
+                            void *userdata);
+aw_result_t aw_start_playback(aw_stream_t **stream,
+                              const char *devname,
+                              const char *name,
+                              aw_config_t cfg,
+                              aw_error_callback_t error_cb,
+                              void *userdata);
 size_t aw_buffer_capacity(aw_stream_t *stream);
 size_t aw_record_peek(aw_stream_t *stream);
 size_t aw_record_read(aw_stream_t *stream, char *buf, size_t bufsize);
