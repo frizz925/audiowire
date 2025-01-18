@@ -36,11 +36,7 @@ async fn init(addr: String, mut args: env::Args) -> Result<(), Box<dyn Error>> {
     let opus_disabled = env::var("OPUS_DISABLED")
         .map(|s| s == "1")
         .unwrap_or_default();
-
     let logger = logging::term_logger();
-    if opus_disabled {
-        info!(logger, "Opus codec is disabled");
-    }
 
     audiowire::initialize()?;
     check_audio(&logger, config, output.as_deref(), input.as_deref())?;
@@ -76,6 +72,7 @@ async fn run(
 
     let mut handles = Vec::new();
     let term = handle_signal()?;
+    let logger = root_logger.new(o!("opus" => !opus_disabled));
 
     if client_type.is_source() && server_type.is_sink() {
         let handle = handle_record(
@@ -83,7 +80,7 @@ async fn run(
             config.clone(),
             input_name,
             addr.to_owned(),
-            root_logger.new(o!("stream" => "record")),
+            logger.new(o!("stream" => "record")),
             output,
             !opus_disabled,
         )?;
@@ -96,7 +93,7 @@ async fn run(
             config.clone(),
             output_name,
             addr.to_owned(),
-            root_logger.new(o!("stream" => "playback")),
+            logger.new(o!("stream" => "playback")),
             input,
             !opus_disabled,
         )?;
