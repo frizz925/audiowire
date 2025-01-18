@@ -27,28 +27,18 @@ async fn main() -> Result<()> {
 
 async fn run() -> Result<()> {
     let config = DEFAULT_CONFIG;
-    let root_logger = logging::term_logger();
     let mut args = env::args();
-    let output_name = args.nth(1);
-    let input_name = args.next();
+    let output = args.nth(1);
+    let input = args.next();
 
-    let main_term = handle_signal()?;
+    let logger = logging::term_logger();
+    let term = handle_signal()?;
+    listen_tcp(term, config, &logger, output, input)
+        .await
+        .map_err(|e| error!(logger, "Listener error: {}", e))
+        .unwrap_or_default();
 
-    let tcp_handle = {
-        let term = Arc::clone(&main_term);
-        let logger = root_logger.new(o!("proto" => "tcp"));
-        let output = output_name.clone();
-        let input = input_name.clone();
-        tokio::spawn(async move {
-            listen_tcp(term, config, &logger, output, input)
-                .await
-                .map_err(|e| error!(logger, "Listener error: {}", e))
-                .unwrap_or_default()
-        })
-    };
-
-    tcp_handle.await?;
-    info!(root_logger, "Server terminated");
+    info!(logger, "Server terminated");
     Ok(())
 }
 
