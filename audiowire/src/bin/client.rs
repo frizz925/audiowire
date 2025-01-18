@@ -8,7 +8,7 @@ use std::{
 };
 
 use audiowire::{
-    handlers::{handle_playback, handle_record, handle_signal},
+    handlers::{check_audio, handle_playback, handle_record, handle_signal},
     logging,
     peer::{PeerReadHalf, PeerWriteHalf},
     Config, StreamFlags, StreamType, DEFAULT_CONFIG,
@@ -31,30 +31,22 @@ async fn main() -> Result<(), String> {
 
 async fn init(addr: String, mut args: env::Args) -> Result<(), Box<dyn Error>> {
     let config = DEFAULT_CONFIG;
-    let input_name = args.next();
-    let output_name = args.next();
+    let input = args.next();
+    let output = args.next();
     let opus_disabled = env::var("OPUS_DISABLED")
         .map(|s| s == "1")
         .unwrap_or_default();
-    let logger = logging::term_logger();
 
+    let logger = logging::term_logger();
     if opus_disabled {
         info!(logger, "Opus codec is disabled");
     }
 
     audiowire::initialize()?;
-
-    let result = run(
-        &addr,
-        config,
-        &logger,
-        input_name,
-        output_name,
-        opus_disabled,
-    )
-    .await;
-
+    check_audio(&logger, config, output.as_deref(), input.as_deref())?;
+    let result = run(&addr, config, &logger, input, output, opus_disabled).await;
     audiowire::terminate()?;
+
     result
 }
 

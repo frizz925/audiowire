@@ -32,24 +32,24 @@ pub fn handle_signal() -> Result<Arc<AtomicBool>> {
 pub fn check_audio(
     logger: &Logger,
     config: Config,
-    output: Option<&str>,
     input: Option<&str>,
+    output: Option<&str>,
 ) -> Result<()> {
     info!(logger, "Running audio system check");
-    if output.map(|s| s != "null").unwrap_or(true) {
-        let mut stream = PlaybackStream::start("playback-test", output, config)?;
-        stream
-            .device_name()
-            .map(|s| info!(logger, "Using playback device: {}", s))
-            .unwrap_or_else(|| info!(logger, "Using playback device"));
-        stream.stop()?;
-    }
     if input.map(|s| s != "null").unwrap_or(true) {
         let mut stream = RecordStream::start("record-test", input, config)?;
         stream
             .device_name()
             .map(|s| info!(logger, "Using record device: {}", s))
             .unwrap_or_else(|| info!(logger, "Using record device"));
+        stream.stop()?;
+    }
+    if output.map(|s| s != "null").unwrap_or(true) {
+        let mut stream = PlaybackStream::start("playback-test", output, config)?;
+        stream
+            .device_name()
+            .map(|s| info!(logger, "Using playback device: {}", s))
+            .unwrap_or_else(|| info!(logger, "Using playback device"));
         stream.stop()?;
     }
     info!(logger, "Audio system check completed");

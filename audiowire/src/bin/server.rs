@@ -1,10 +1,7 @@
 use std::{
     env,
     error::Error,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
-    },
+    sync::{atomic::Ordering, Arc},
     time::Duration,
 };
 
@@ -35,9 +32,7 @@ async fn run() -> Result<()> {
 
     let logger = logging::term_logger();
     check_audio(&logger, config.clone(), output.as_deref(), input.as_deref())?;
-
-    let term = handle_signal()?;
-    listen_tcp(term, config, &logger, output, input)
+    listen_tcp(config, &logger, input, output)
         .await
         .map_err(|e| error!(logger, "Listener error: {}", e))
         .unwrap_or_default();
@@ -46,7 +41,6 @@ async fn run() -> Result<()> {
 }
 
 async fn listen_tcp(
-    term: Arc<AtomicBool>,
     config: Config,
     root_logger: &Logger,
     output_name: Option<String>,
@@ -66,6 +60,7 @@ async fn listen_tcp(
         listener.local_addr()?
     );
 
+    let term = handle_signal()?;
     while !term.load(Ordering::Relaxed) {
         let listener_ref = &listener;
         let future = timeout(Duration::from_secs(1), async move {
