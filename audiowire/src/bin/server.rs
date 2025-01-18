@@ -82,30 +82,45 @@ async fn listen_tcp(
         let client_type = flags.stream_type();
         let opus_enabled = flags.opus_enabled();
         let stream_logger = client_logger.new(o!("opus" => opus_enabled));
+        let mut handles = Vec::new();
 
         if server_type.is_sink() && client_type.is_source() {
-            handle_playback(
+            let logger = stream_logger.new(o!("stream" => "playback"));
+            let handle = handle_playback(
                 Arc::clone(&term),
                 config,
                 output_name.clone(),
                 addr.to_string(),
-                stream_logger.new(o!("stream" => "playback")),
+                logger.clone(),
                 input,
                 opus_enabled,
             )?;
+            handles.push((handle, logger));
         }
 
         if server_type.is_source() && client_type.is_sink() {
-            handle_record(
+            let logger = stream_logger.new(o!("stream" => "record"));
+            let handle = handle_record(
                 Arc::clone(&term),
                 config,
                 input_name.clone(),
                 addr.to_string(),
-                stream_logger.new(o!("stream" => "record")),
+                logger.clone(),
                 output,
                 opus_enabled,
             )?;
+            handles.push((handle, logger));
         }
+
+        tokio::spawn(async move {
+            for (handle, logger) in handles {
+                handle
+                    .await
+                    .map_err(|e| error!(logger, "Join error: {}", e))
+                    .unwrap_or_default();
+            }
+            info!(client_logger, "Client disconnected");
+        });
     }
     Ok(())
 }
