@@ -9,10 +9,9 @@ use tokio::task::JoinHandle;
 use tokio::time::sleep;
 
 use crate::peer::PeerWriteHalf;
+use crate::StreamBuilder;
 
-use super::audiowire::{
-    start_playback, start_record, Config, PlaybackStream, RecordStream, Stream,
-};
+use super::audiowire::{Config, PlaybackStream, RecordStream, Stream};
 use super::opus::ChannelsParser;
 use super::peer::PeerReadHalf;
 
@@ -30,6 +29,33 @@ pub fn handle_signal() -> Result<Arc<AtomicBool>> {
     Ok(term)
 }
 
+pub fn check_audio(
+    logger: &Logger,
+    config: Config,
+    output: Option<&str>,
+    input: Option<&str>,
+) -> Result<()> {
+    info!(logger, "Running audio system check");
+    if output.map(|s| s != "null").unwrap_or(true) {
+        let mut stream = PlaybackStream::start("playback-test", output, config)?;
+        stream
+            .device_name()
+            .map(|s| info!(logger, "Using playback device: {}", s))
+            .unwrap_or_else(|| info!(logger, "Using playback device"));
+        stream.stop()?;
+    }
+    if input.map(|s| s != "null").unwrap_or(true) {
+        let mut stream = RecordStream::start("record-test", input, config)?;
+        stream
+            .device_name()
+            .map(|s| info!(logger, "Using record device: {}", s))
+            .unwrap_or_else(|| info!(logger, "Using record device"));
+        stream.stop()?;
+    }
+    info!(logger, "Audio system check completed");
+    Ok(())
+}
+
 pub fn handle_playback<P: PeerReadHalf + Send + 'static>(
     term: Arc<AtomicBool>,
     config: Config,
@@ -39,13 +65,9 @@ pub fn handle_playback<P: PeerReadHalf + Send + 'static>(
     peer: P,
     opus_enabled: bool,
 ) -> Result<JoinHandle<()>> {
-    let mut stream = start_playback(
-        device.as_deref(),
-        &name,
-        config.clone(),
-        Some(error_cb),
-        Some(root_logger.clone()),
-    )?;
+    let mut stream = StreamBuilder::new(config)
+        .error_cb(error_cb, Some(root_logger.clone()))
+        .start_playback(&name, device.as_deref())?;
     let logger = match stream.device_name() {
         Some(device) => root_logger.new(o!("device" => device.to_owned())),
         None => root_logger.new(o!()),
@@ -132,13 +154,9 @@ pub fn handle_record<P: PeerWriteHalf + Send + 'static>(
     peer: P,
     opus_enabled: bool,
 ) -> Result<JoinHandle<()>> {
-    let mut stream = start_record(
-        device.as_deref(),
-        &name,
-        config.clone(),
-        Some(error_cb),
-        Some(root_logger.clone()),
-    )?;
+    let mut stream = StreamBuilder::new(config)
+        .error_cb(error_cb, Some(root_logger.clone()))
+        .start_record(&name, device.as_deref())?;
     let logger = match stream.device_name() {
         Some(device) => root_logger.new(o!("device" => device.to_owned())),
         None => root_logger.new(o!()),

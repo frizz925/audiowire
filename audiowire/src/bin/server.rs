@@ -9,7 +9,7 @@ use std::{
 };
 
 use audiowire::{
-    handlers::{handle_playback, handle_record, handle_signal},
+    handlers::{check_audio, handle_playback, handle_record, handle_signal},
     logging,
     peer::PeerWriteHalf,
     Config, StreamFlags, StreamType, DEFAULT_CONFIG,
@@ -34,13 +34,14 @@ async fn run() -> Result<()> {
     let input = args.next();
 
     let logger = logging::term_logger();
+    check_audio(&logger, config.clone(), output.as_deref(), input.as_deref())?;
+
     let term = handle_signal()?;
     listen_tcp(term, config, &logger, output, input)
         .await
         .map_err(|e| error!(logger, "Listener error: {}", e))
         .unwrap_or_default();
 
-    info!(logger, "Server terminated");
     Ok(())
 }
 
@@ -56,12 +57,15 @@ async fn listen_tcp(
         output_name.as_ref().map(|s| s != "null").unwrap_or(true),
     );
     let mut buf = [0u8; 16];
+
+    info!(root_logger, "Starting server");
     let listener = TcpListener::bind("0.0.0.0:8760").await?;
     info!(
         root_logger,
         "Server listening at {}",
         listener.local_addr()?
     );
+
     while !term.load(Ordering::Relaxed) {
         let listener_ref = &listener;
         let future = timeout(Duration::from_secs(1), async move {
@@ -122,5 +126,7 @@ async fn listen_tcp(
             info!(client_logger, "Client disconnected");
         });
     }
+
+    info!(root_logger, "Server terminated");
     Ok(())
 }

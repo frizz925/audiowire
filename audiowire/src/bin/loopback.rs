@@ -1,8 +1,8 @@
 use std::{env, error::Error, ffi::c_void, ptr, sync::atomic::Ordering, thread::sleep};
 
 use audiowire::{
-    handlers::handle_signal, initialize, logging::term_logger, start_playback, start_record,
-    terminate, Config, SampleFormat, Stream,
+    handlers::handle_signal, initialize, logging::term_logger, terminate, Config, SampleFormat,
+    Stream, StreamBuilder,
 };
 use slog::{error, info, Logger};
 
@@ -27,25 +27,17 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let logger = term_logger();
 
-    let mut record = start_record(
-        input.as_deref(),
-        "Source",
-        config,
-        Some(error_cb),
-        Some(logger.clone()),
-    )?;
+    let mut record = StreamBuilder::new(config)
+        .error_cb(error_cb, Some(logger.clone()))
+        .start_record("Source", input.as_deref())?;
     record
         .device_name()
         .map(|s| info!(logger, "Record started, device: {}", s))
         .unwrap_or_else(|| info!(logger, "Record started"));
 
-    let mut playback = start_playback(
-        output.as_deref(),
-        "Sink",
-        config,
-        Some(error_cb),
-        Some(logger.clone()),
-    )?;
+    let mut playback = StreamBuilder::new(config)
+        .error_cb(error_cb, Some(logger.clone()))
+        .start_playback("Sink", output.as_deref())?;
     playback
         .device_name()
         .map(|s| info!(logger, "Playback started, device: {}", s))

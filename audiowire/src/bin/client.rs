@@ -43,7 +43,7 @@ async fn init(addr: String, mut args: env::Args) -> Result<(), Box<dyn Error>> {
     }
 
     audiowire::initialize()?;
-    // TODO: Run audio device check before connecting to server
+
     let result = run(
         &addr,
         config,
@@ -53,7 +53,7 @@ async fn init(addr: String, mut args: env::Args) -> Result<(), Box<dyn Error>> {
         opus_disabled,
     )
     .await;
-    info!(logger, "Connection terminated");
+
     audiowire::terminate()?;
     result
 }
@@ -116,6 +116,7 @@ async fn run(
         term.store(true, Ordering::Relaxed);
     }
 
+    info!(root_logger, "Connection terminated");
     Ok(())
 }
 
