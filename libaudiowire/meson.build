@@ -11,6 +11,14 @@ host_system = host_machine.system()
 if host_system == 'linux'
     src += 'src/pulseaudio.c'
     deps += compiler.find_library('pulse', required: true)
+elif host_system == 'darwin'
+    src += 'src/coreaudio.c'
+    # TODO: Figure out dependencies for CoreAudio
+    deps += [
+        dependency('CoreFoundation'),
+        dependency('CoreAudio'),
+        dependency('AudioToolbox'),
+    ]
 else
     src += 'src/portaudio.c'
     deps += compiler.find_library('portaudio', required: true)
