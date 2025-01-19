@@ -36,3 +36,7 @@ inline size_t aw_playback_write(aw_stream_t *s, const char *buf, size_t bufsize)
 inline const char *aw_device_name(aw_stream_t *s) {
     return STREAM_FIELD(s, devname);
 }
+
+inline uint32_t aw_sample_rate(aw_stream_t *s) {
+    return STREAM_FIELD(s, sample_rate);
+}

@@ -10,9 +10,12 @@
 
 #define MAX_BUFFER_FRAMES 65536
 
+#define AW_RESULT_DEVICE_NOT_FOUND aw_result(-1, "Device not found")
+
 typedef struct aw_stream_base {
     ringbuf_t *ringbuf;
     const char *devname;
+    uint32_t sample_rate;
     size_t max_bufsize;
     aw_config_t config;
     aw_error_callback_t error_cb;
@@ -33,11 +36,6 @@ static inline size_t frame_buffer_size(const aw_config_t *cfg, size_t count) {
     return count * frame_size(cfg);
 }
 
-#define error_result(err, ptr, message) \
-    if (ptr != NULL) \
-        *ptr = message; \
-    return err
-
 static inline aw_result_t aw_result(int code, const char *message) {
     aw_result_t result = {code, message};
     return result;
@@ -52,6 +50,7 @@ static inline void aw_stream_base_init(aw_stream_base_t *base,
     base->ringbuf = ringbuf_create(base->max_bufsize);
     base->config = cfg;
     base->devname = devname;
+    base->sample_rate = 0;
     base->error_cb = error_cb;
     base->userdata = userdata;
 }
