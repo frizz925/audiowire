@@ -68,10 +68,11 @@ pub fn handle_playback<P: PeerReadHalf + Send + 'static>(
     let mut stream = StreamBuilder::new(config)
         .error_cb(error_cb, Some(root_logger.clone()))
         .start_playback(&name, device.as_deref())?;
-    let logger = match stream.device_name() {
+    let device_logger = match stream.device_name() {
         Some(device) => root_logger.new(o!("device" => device.to_owned())),
         None => root_logger.new(o!()),
     };
+    let logger = device_logger.new(o!("sample_rate" => stream.sample_rate()));
     info!(
         logger,
         "Playback started, buffer samples: {}", config.max_buffer_frames
@@ -157,10 +158,11 @@ pub fn handle_record<P: PeerWriteHalf + Send + 'static>(
     let mut stream = StreamBuilder::new(config)
         .error_cb(error_cb, Some(root_logger.clone()))
         .start_record(&name, device.as_deref())?;
-    let logger = match stream.device_name() {
+    let device_logger = match stream.device_name() {
         Some(device) => root_logger.new(o!("device" => device.to_owned())),
         None => root_logger.new(o!()),
     };
+    let logger = device_logger.new(o!("sample_rate" => stream.sample_rate()));
     info!(
         logger,
         "Record started, buffer samples: {}", config.max_buffer_frames

@@ -152,6 +152,11 @@ pub trait Stream: StreamInternal + Sized {
         self.base().devname.as_deref()
     }
 
+    #[inline]
+    fn sample_rate(&self) -> u32 {
+        unsafe { aw_sample_rate(self.base().handle) }
+    }
+
     fn peek(&self) -> usize;
 
     // Stop is idempotent
