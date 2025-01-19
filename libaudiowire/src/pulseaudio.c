@@ -6,6 +6,8 @@
 
 #define APPLICATION_NAME "Audiowire"
 
+static const pa_stream_flags_t STREAM_FLAGS = PA_STREAM_ADJUST_LATENCY;
+
 struct aw_stream {
     aw_stream_base_t base;
     pa_sample_spec sample_spec;
@@ -196,8 +198,8 @@ static aw_result_t start_stream(aw_stream_t **s,
     else
         pa_stream_set_write_callback(stream->handle, on_stream_write, stream);
 
-    int res = is_input ? pa_stream_connect_record(stream->handle, devname, ba, PA_STREAM_ADJUST_LATENCY)
-                       : pa_stream_connect_playback(stream->handle, devname, ba, PA_STREAM_ADJUST_LATENCY, NULL, NULL);
+    int res = is_input ? pa_stream_connect_record(stream->handle, devname, ba, STREAM_FLAGS)
+                       : pa_stream_connect_playback(stream->handle, devname, ba, STREAM_FLAGS, NULL, NULL);
     if (res)
         goto unlock_error;
 
@@ -211,6 +213,7 @@ static aw_result_t start_stream(aw_stream_t **s,
         }
     }
 
+    base->sample_rate = pa_stream_get_sample_spec(stream->handle)->rate;
     pa_threaded_mainloop_unlock(stream->mainloop);
 
     *s = stream;
