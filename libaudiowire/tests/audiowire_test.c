@@ -1,3 +1,4 @@
+
 #include "audiowire.h"
 
 #include <assert.h>
@@ -46,7 +47,10 @@ int main() {
     assert_aw_result(aw_start_playback(&playback, NULL, "playback-test", config, on_error, NULL));
 
     assert(aw_device_name(record) != NULL);
+    assert(aw_sample_rate(record) > 0);
+
     assert(aw_device_name(playback) != NULL);
+    assert(aw_sample_rate(playback) > 0);
 
     size_t read = 0;
     for (;;) {

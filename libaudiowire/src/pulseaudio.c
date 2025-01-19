@@ -140,7 +140,8 @@ static aw_result_t start_stream(aw_stream_t **s,
                                 void *userdata) {
     aw_result_t result = AW_RESULT_NO_ERROR;
     aw_stream_t *stream = calloc(1, sizeof(aw_stream_t));
-    aw_stream_base_init(&stream->base, cfg, devname, error_cb, userdata);
+    aw_stream_base_t *base = &stream->base;
+    aw_stream_base_init(base, cfg, devname, error_cb, userdata);
 
     pa_sample_spec *ss = &stream->sample_spec;
     ss->channels = cfg.channels;

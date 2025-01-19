@@ -65,7 +65,10 @@ mod tests {
             ));
 
             assert!(!aw_device_name(record).is_null());
+            assert!(aw_sample_rate(record) > 0);
+
             assert!(!aw_device_name(playback).is_null());
+            assert!(aw_sample_rate(playback) > 0);
 
             let mut buf_arr = [0u8; 65536];
             let bufsize = buf_arr.len();

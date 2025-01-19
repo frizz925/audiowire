@@ -19,13 +19,19 @@ struct aw_stream {
 static PaHostApiIndex host_api;
 #endif
 
-static inline bool device_is_valid(const aw_config_t *cfg, const PaDeviceInfo *info, bool is_input) {
+static inline bool
+device_is_valid(const aw_config_t *cfg, const PaDeviceInfo *info, const char *devname, bool is_input) {
 #ifdef _WIN32
     if (info->hostApi != host_api)
         return false;
 #endif
-    return (is_input && info->maxInputChannels >= cfg->channels) ||
-           (!is_input && info->maxOutputChannels >= cfg->channels);
+    if (is_input && info->maxInputChannels < cfg->channels)
+        return false;
+    if (!is_input && info->maxOutputChannels < cfg->channels)
+        return false;
+    if (devname && !strstr(info->name, devname))
+        return false;
+    return true;
 }
 
 static int on_stream_read(const void *input,
@@ -72,32 +78,27 @@ static aw_result_t start_stream(aw_stream_t **s,
     assert(cfg.max_buffer_frames >= cfg.buffer_frames);
     assert(cfg.max_buffer_frames <= MAX_BUFFER_FRAMES);
 
-    aw_stream_t *stream = NULL;
     const char *message = NULL;
     PaError err = paNoError;
 
     PaDeviceIndex device = is_input ? Pa_GetDefaultInputDevice() : Pa_GetDefaultOutputDevice();
     const PaDeviceInfo *info = Pa_GetDeviceInfo(device);
-    if (devname != NULL || !device_is_valid(&cfg, info, is_input)) {
+    if (!device_is_valid(&cfg, info, devname, is_input)) {
         device = paNoDevice;
         for (PaDeviceIndex idx = 0; idx < Pa_GetDeviceCount(); idx++) {
             info = Pa_GetDeviceInfo(idx);
-            if (devname && !strstr(info->name, devname))
-                continue;
-            if (!device_is_valid(&cfg, info, is_input))
-                continue;
-            device = idx;
-            break;
+            if (device_is_valid(&cfg, info, devname, is_input)) {
+                device = idx;
+                break;
+            }
         }
     }
-    if (device == paNoDevice) {
-        err = -1;
-        message = "Device not found";
-        goto error;
-    }
+    if (device == paNoDevice)
+        return AW_RESULT_DEVICE_NOT_FOUND;
 
-    stream = calloc(1, sizeof(aw_stream_t));
-    aw_stream_base_init(&stream->base, cfg, info->name, error_cb, userdata);
+    aw_stream_t *stream = calloc(1, sizeof(aw_stream_t));
+    aw_stream_base_t *base = &stream->base;
+    aw_stream_base_init(base, cfg, info->name, error_cb, userdata);
 
     PaSampleFormat format;
     switch (cfg.sample_format) {
@@ -125,19 +126,18 @@ static aw_result_t start_stream(aw_stream_t **s,
                         is_input ? on_stream_read : on_stream_write,
                         stream);
     if (err)
-        goto pa_error;
+        goto error;
+    base->sample_rate = Pa_GetStreamInfo(stream->handle)->sampleRate;
+
     if ((err = Pa_StartStream(stream->handle)))
-        goto pa_error;
+        goto error;
 
     *s = stream;
     return AW_RESULT_NO_ERROR;
 
-pa_error:
-    message = Pa_GetErrorText(err);
-
 error:
-    if (stream)
-        free_stream(stream);
+    message = Pa_GetErrorText(err);
+    free_stream(stream);
     return aw_result(err, message);
 }
 
