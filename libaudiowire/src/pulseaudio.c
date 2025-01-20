@@ -35,15 +35,11 @@ static void on_context_state(pa_context *c, void *userdata) {
     pa_threaded_mainloop *mainloop = (pa_threaded_mainloop *)userdata;
 
     switch (pa_context_get_state(c)) {
-    case PA_CONTEXT_UNCONNECTED:
-    case PA_CONTEXT_CONNECTING:
-    case PA_CONTEXT_AUTHORIZING:
-    case PA_CONTEXT_SETTING_NAME:
-        break;
     case PA_CONTEXT_READY:
     case PA_CONTEXT_FAILED:
     case PA_CONTEXT_TERMINATED:
         pa_threaded_mainloop_signal(mainloop, 0);
+    default:
         break;
     }
 }
@@ -54,19 +50,17 @@ static void on_stream_state(pa_stream *s, void *userdata) {
     switch (pa_stream_get_state(s)) {
     case PA_STREAM_READY:
         stream->base.devname = pa_stream_get_device_name(s);
-        pa_threaded_mainloop_signal(stream->mainloop, 0);
-        break;
-    case PA_STREAM_UNCONNECTED:
-    case PA_STREAM_CREATING:
     case PA_STREAM_FAILED:
     case PA_STREAM_TERMINATED:
+        pa_threaded_mainloop_signal(stream->mainloop, 0);
+    default:
         break;
     }
 }
 
 static void on_stream_moved(pa_stream *s, void *userdata) {
-    aw_stream_t *stream = (aw_stream_t *)userdata;
-    stream->base.devname = pa_stream_get_device_name(s);
+    aw_stream_base_t *base = (aw_stream_base_t *)userdata;
+    base->devname = pa_stream_get_device_name(s);
 }
 
 static void on_stream_read(pa_stream *s, size_t length, void *userdata) {
