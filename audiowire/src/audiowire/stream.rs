@@ -280,15 +280,16 @@ unsafe fn start_stream(
     userdata: *mut c_void,
 ) -> Result<*mut aw_stream> {
     let mut stream: *mut aw_stream = ptr::null_mut();
-    let cdev = device.map(|s| CString::new(s).unwrap());
-    let dev_ptr = cdev.as_ref().map(|s| s.as_ptr()).unwrap_or(ptr::null());
-    let cname = CString::new(name).unwrap();
+    let cdev = device
+        .map(|s| CString::new(s).unwrap().into_raw())
+        .unwrap_or(ptr::null_mut());
+    let cname = CString::new(name).unwrap().into_raw();
     let result = if let Some(error_cb) = error_cb {
         let handle = Box::into_raw(Box::new(ErrorHandle { error_cb, userdata }));
         start_fn(
             &mut stream,
-            dev_ptr,
-            cname.as_ptr(),
+            cdev,
+            cname,
             config.into(),
             Some(on_error),
             handle as *mut c_void,
@@ -296,8 +297,8 @@ unsafe fn start_stream(
     } else {
         start_fn(
             &mut stream,
-            dev_ptr,
-            cname.as_ptr(),
+            cdev,
+            cname,
             config.into(),
             None,
             ptr::null_mut(),
@@ -323,7 +324,7 @@ impl StreamBuilder {
     }
 
     #[inline]
-    pub fn error_cb<T>(&mut self, error_cb: ErrorCallback, userdata: Option<T>) -> &Self {
+    pub fn error_cb<T>(mut self, error_cb: ErrorCallback, userdata: Option<T>) -> Self {
         self.error_cb = Some(error_cb);
         self.userdata = userdata
             .map(|v| Box::into_raw(Box::new(v)) as *mut c_void)
@@ -332,20 +333,20 @@ impl StreamBuilder {
     }
 
     #[inline]
-    pub fn start_record(&self, name: &str, device: Option<&str>) -> Result<RecordStream> {
+    pub fn start_record(self, name: &str, device: Option<&str>) -> Result<RecordStream> {
         self.start_stream(aw_start_record, name, device)
             .map(|base| RecordStream { base })
     }
 
     #[inline]
-    pub fn start_playback(&self, name: &str, device: Option<&str>) -> Result<PlaybackStream> {
+    pub fn start_playback(self, name: &str, device: Option<&str>) -> Result<PlaybackStream> {
         self.start_stream(aw_start_playback, name, device)
             .map(|base| PlaybackStream { base })
     }
 
     #[inline]
     fn start_stream(
-        &self,
+        self,
         start_fn: StartStreamFn,
         name: &str,
         device: Option<&str>,
