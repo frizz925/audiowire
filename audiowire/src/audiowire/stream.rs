@@ -6,8 +6,10 @@ use std::{
 
 use audiowire_sys::*;
 
-use super::result::{parse_result_lazy, Result};
-use super::{config::Config, result::parse_result_value};
+use super::{
+    config::Config,
+    result::{parse_result_lazy, parse_result_value, Result},
+};
 
 #[derive(Clone, Copy)]
 pub struct StreamType(u8);

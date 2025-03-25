@@ -1,19 +1,23 @@
-use std::error::Error;
-use std::ffi::c_void;
-use std::ptr;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::{
+    error::Error,
+    ffi::c_void,
+    ptr,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+};
 
 use slog::{error, info, o, Logger};
-use tokio::task::JoinHandle;
-use tokio::time::sleep;
+use tokio::{task::JoinHandle, time::sleep};
 
-use crate::peer::PeerWriteHalf;
-use crate::StreamBuilder;
+use crate::{peer::PeerWriteHalf, StreamBuilder};
 
-use super::audiowire::{Config, PlaybackStream, RecordStream, Stream};
-use super::opus::ChannelsParser;
-use super::peer::PeerReadHalf;
+use super::{
+    audiowire::{Config, PlaybackStream, RecordStream, Stream},
+    opus::ChannelsParser,
+    peer::PeerReadHalf,
+};
 
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
 
