@@ -73,6 +73,7 @@ async fn listen_tcp(
 
     info!(root_logger, "Starting server");
     let listener = if check_sd_socket() {
+        info!(root_logger, "Using systemd activation socket");
         let std_listener = unsafe { std::net::TcpListener::from_raw_fd(3) };
         TcpListener::from_std(std_listener)?
     } else {
@@ -181,6 +182,7 @@ async fn handle_client(
 
 fn check_sd_socket() -> bool {
     unsafe {
-        libc::fcntl(SYSTEMD_SOCKET_FD, libc::F_GETFD) != -1 && libc::__errno_location().read() == 0
+        libc::fcntl(SYSTEMD_SOCKET_FD, libc::F_GETFD) != -1
+            && libc::__errno_location().read() != libc::EBADF
     }
 }
