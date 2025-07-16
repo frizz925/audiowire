@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 audiowire-sys = { path = "../audiowire-sys" }
 chrono = "0.4.39"
+libc = "0.2.174"
 opus = "0.3.0"
 signal-hook = "0.3.17"
 slog = "2.7.0"

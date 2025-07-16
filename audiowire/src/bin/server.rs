@@ -2,6 +2,7 @@ use std::{
     env,
     error::Error,
     net::SocketAddr,
+    os::fd::FromRawFd,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
@@ -23,6 +24,8 @@ use tokio::{
 };
 
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
+
+const SYSTEMD_SOCKET_FD: i32 = 3;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -60,7 +63,12 @@ async fn listen_tcp(
     );
 
     info!(root_logger, "Starting server");
-    let listener = TcpListener::bind("0.0.0.0:8760").await?;
+    let listener = if check_sd_socket() {
+        let std_listener = unsafe { std::net::TcpListener::from_raw_fd(3) };
+        TcpListener::from_std(std_listener)?
+    } else {
+        TcpListener::bind("0.0.0.0:8760").await?
+    };
     info!(
         root_logger,
         "Server listening at {}",
@@ -159,4 +167,10 @@ async fn handle_client(
     });
 
     Ok(())
+}
+
+fn check_sd_socket() -> bool {
+    unsafe {
+        libc::fcntl(SYSTEMD_SOCKET_FD, libc::F_GETFD) != -1 && libc::__errno_location().read() == 0
+    }
 }
