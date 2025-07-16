@@ -3,6 +3,7 @@ use std::{
     error::Error,
     net::SocketAddr,
     os::fd::FromRawFd,
+    process::ExitCode,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
@@ -28,32 +29,40 @@ type Result<T> = std::result::Result<T, Box<dyn Error>>;
 const SYSTEMD_SOCKET_FD: i32 = 3;
 
 #[tokio::main]
-async fn main() -> Result<()> {
-    audiowire::initialize()?;
-    let result = run().await;
-    audiowire::terminate()?;
-    result
+async fn main() -> ExitCode {
+    let logger = logging::term_logger();
+    if let Err(e) = audiowire::initialize() {
+        error!(logger, "Failed to initialize audio: {e}");
+        return ExitCode::FAILURE;
+    }
+    run(&logger).await;
+    if let Err(e) = audiowire::terminate() {
+        error!(logger, "Failed to terminate audio: {e}");
+        return ExitCode::FAILURE;
+    }
+    ExitCode::SUCCESS
 }
 
-async fn run() -> Result<()> {
+async fn run(logger: &Logger) {
     let config = DEFAULT_CONFIG;
     let mut args = env::args();
     let output = args.nth(1);
     let input = args.next();
 
-    let logger = logging::term_logger();
-    check_audio(&logger, config.clone(), input.as_deref(), output.as_deref())?;
-    listen_tcp(config, &logger, input, output)
-        .await
-        .map_err(|e| error!(logger, "Listener error: {}", e))
-        .unwrap_or_default();
+    if let Err(e) = check_audio(logger, config.clone(), input.as_deref(), output.as_deref()) {
+        error!(logger, "Check audio error: {e}");
+        return;
+    }
 
-    Ok(())
+    listen_tcp(logger, config, input, output)
+        .await
+        .map_err(|e| error!(logger, "Listener error: {e}"))
+        .unwrap_or_default();
 }
 
 async fn listen_tcp(
-    config: Config,
     root_logger: &Logger,
+    config: Config,
     input_name: Option<String>,
     output_name: Option<String>,
 ) -> Result<()> {
@@ -161,7 +170,7 @@ async fn handle_client(
         for (handle, logger) in handles {
             handle
                 .await
-                .map_err(|e| error!(logger, "Join error: {}", e))
+                .map_err(|e| error!(logger, "Join error: {e}"))
                 .unwrap_or_default();
         }
         info!(logger, "Client disconnected");

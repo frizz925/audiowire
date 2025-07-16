@@ -29,7 +29,7 @@ async fn main() -> Result<(), String> {
     }
 }
 
-async fn init(addr: String, mut args: env::Args) -> Result<(), Box<dyn Error>> {
+async fn init(addr: String, mut args: env::Args) -> Result<(), String> {
     let config = DEFAULT_CONFIG;
     let input = args.next();
     let output = args.next();
@@ -37,12 +37,18 @@ async fn init(addr: String, mut args: env::Args) -> Result<(), Box<dyn Error>> {
         .map(|s| s == "1")
         .unwrap_or_default();
     let logger = logging::term_logger();
-
-    audiowire::initialize()?;
-    check_audio(&logger, config, output.as_deref(), input.as_deref())?;
-    let result = run(&addr, config, &logger, input, output, opus_disabled).await;
-    audiowire::terminate()?;
-
+    if let Err(e) = audiowire::initialize() {
+        return Err(format!("Failed to initialize audio: {e}"));
+    }
+    if let Err(e) = check_audio(&logger, config, output.as_deref(), input.as_deref()) {
+        return Err(format!("Audio check failed: {e}"));
+    }
+    let result = run(&addr, config, &logger, input, output, opus_disabled)
+        .await
+        .map_err(|e| format!("Audio stream failed: {e}"));
+    if let Err(e) = audiowire::terminate() {
+        return Err(format!("Failed to terminate audio: {e}"));
+    }
     result
 }
 
