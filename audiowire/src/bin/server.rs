@@ -67,7 +67,8 @@ async fn listen_tcp(
         let std_listener = unsafe { std::net::TcpListener::from_raw_fd(3) };
         TcpListener::from_std(std_listener)?
     } else {
-        TcpListener::bind("0.0.0.0:8760").await?
+        let addr = env::var("LISTENER_ADDR").unwrap_or("0.0.0.0:8760".to_owned());
+        TcpListener::bind(addr).await?
     };
     info!(
         root_logger,
