@@ -66,15 +66,18 @@ async fn listen_tcp(
     input_name: Option<String>,
     output_name: Option<String>,
 ) -> Result<()> {
+    let use_sd_socket = env::var("SYSTEMD_SOCKET")
+        .map(|s| s == "true")
+        .unwrap_or(false);
     let server_type = StreamType::new(
         input_name.as_ref().map(|s| s != "null").unwrap_or(true),
         output_name.as_ref().map(|s| s != "null").unwrap_or(true),
     );
 
     info!(root_logger, "Starting server");
-    let listener = if check_sd_socket() {
+    let listener = if use_sd_socket {
         info!(root_logger, "Using systemd activation socket");
-        let std_listener = unsafe { std::net::TcpListener::from_raw_fd(3) };
+        let std_listener = unsafe { std::net::TcpListener::from_raw_fd(SYSTEMD_SOCKET_FD) };
         TcpListener::from_std(std_listener)?
     } else {
         let addr = env::var("LISTENER_ADDR").unwrap_or("0.0.0.0:8760".to_owned());
@@ -178,11 +181,4 @@ async fn handle_client(
     });
 
     Ok(())
-}
-
-fn check_sd_socket() -> bool {
-    unsafe {
-        libc::fcntl(SYSTEMD_SOCKET_FD, libc::F_GETFD) != -1
-            && libc::__errno_location().read() != libc::EBADF
-    }
 }
