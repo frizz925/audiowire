@@ -39,7 +39,7 @@ async fn init(addr: String, mut args: env::Args) -> Result<(), Box<dyn Error>> {
     let logger = logging::term_logger();
 
     audiowire::initialize()?;
-    check_audio(&logger, config, output.as_deref(), input.as_deref())?;
+    check_audio(&logger, config, input.as_deref(), output.as_deref())?;
     let result = run(&addr, config, &logger, input, output, opus_disabled).await;
     audiowire::terminate()?;
 
