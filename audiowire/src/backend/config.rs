@@ -5,6 +5,14 @@ use audiowire_sys::{
     aw_sample_size,
 };
 
+pub const DEFAULT_CONFIG: Config = Config {
+    channels: 2,
+    sample_rate: 48000,
+    sample_format: SampleFormat::S16,
+    buffer_frames: 960,
+    max_buffer_frames: 14400,
+};
+
 #[derive(Clone, Copy)]
 pub enum SampleFormat {
     S16 = aw_sample_format_AW_SAMPLE_FORMAT_S16 as isize,

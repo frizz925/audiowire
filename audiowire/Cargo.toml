@@ -4,23 +4,20 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+anyhow = { version = "1.0", features = ["backtrace"] }
 audiowire-sys = { path = "../audiowire-sys" }
-chrono = "0.4.39"
-opus = "0.3.0"
-signal-hook = "0.3.17"
-slog = "2.7.0"
-slog-async = "2.8.0"
-slog-term = "2.9.1"
-tokio = { version = "1.42.0", features = ["macros", "rt-multi-thread", "net", "io-util", "time", "sync"] }
+bytes = "1.11"
+chrono = "0.4"
+clap = "4.5"
+env_logger = { version = "0.11", features = ["kv"] }
+log = { version = "0.4", features = ["kv", "kv_std", "serde"] }
+opus = "0.3"
+tokio = { version = "1.42", features = ["rt-multi-thread", "net", "io-util", "time", "sync", "signal", "macros"] }
 
 [[bin]]
-name = "audiowire-server"
-path = "./src/bin/server.rs"
+name = "audiowire-udp-server"
+path = "./src/bin/udp_server.rs"
 
 [[bin]]
-name = "audiowire-client"
-path = "./src/bin/client.rs"
-
-[[bin]]
-name = "audiowire-loopback"
-path = "./src/bin/loopback.rs"
+name = "audiowire-udp-client"
+path = "./src/bin/udp_client.rs"

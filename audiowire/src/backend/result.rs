@@ -4,7 +4,7 @@ use audiowire_sys::aw_result;
 
 use super::errors::Error;
 
-pub type Result<T> = std::result::Result<T, Error>;
+pub type Result<T = (), E = Error> = std::result::Result<T, E>;
 
 #[inline]
 pub(super) fn parse_result(res: aw_result) -> Result<()> {
