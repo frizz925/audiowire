@@ -1,5 +1,5 @@
 use std::{
-    ffi::{c_char, c_int, CStr, CString},
+    ffi::{CStr, CString, c_char, c_int},
     os::raw::c_void,
     ptr,
 };
@@ -8,7 +8,7 @@ use audiowire_sys::*;
 
 use super::{
     config::Config,
-    result::{parse_result_lazy, parse_result_value, Result},
+    result::{Result, parse_result_lazy, parse_result_value},
 };
 
 pub struct BaseStream {
@@ -155,10 +155,12 @@ struct ErrorHandle {
 }
 
 unsafe extern "C" fn on_error(err: c_int, message: *const c_char, userdata: *mut c_void) {
-    let handle = &ptr::read(userdata as *mut ErrorHandle);
+    let handle = unsafe { &ptr::read(userdata as *mut ErrorHandle) };
     (handle.error_cb)(
         err as i32,
-        CStr::from_ptr(message).to_str().unwrap_or_default(),
+        unsafe { CStr::from_ptr(message) }
+            .to_str()
+            .unwrap_or_default(),
         handle.userdata,
     );
 }
@@ -187,23 +189,27 @@ unsafe fn start_stream(
     let cname = CString::new(name).unwrap().into_raw();
     let result = if let Some(error_cb) = error_cb {
         let handle = Box::into_raw(Box::new(ErrorHandle { error_cb, userdata }));
-        start_fn(
-            &mut stream,
-            cdev,
-            cname,
-            config.into(),
-            Some(on_error),
-            handle as *mut c_void,
-        )
+        unsafe {
+            start_fn(
+                &mut stream,
+                cdev,
+                cname,
+                config.into(),
+                Some(on_error),
+                handle as *mut c_void,
+            )
+        }
     } else {
-        start_fn(
-            &mut stream,
-            cdev,
-            cname,
-            config.into(),
-            None,
-            ptr::null_mut(),
-        )
+        unsafe {
+            start_fn(
+                &mut stream,
+                cdev,
+                cname,
+                config.into(),
+                None,
+                ptr::null_mut(),
+            )
+        }
     };
     parse_result_value(result, stream)
 }

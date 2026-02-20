@@ -7,7 +7,7 @@ include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
 #[cfg(test)]
 mod tests {
     use std::{
-        ffi::{c_char, c_int, c_void, CStr, CString},
+        ffi::{CStr, CString, c_char, c_int, c_void},
         ptr,
         thread::sleep,
         time::Duration,
@@ -23,11 +23,9 @@ mod tests {
     }
 
     unsafe extern "C" fn on_error(err: c_int, message: *const c_char, _: *mut c_void) {
-        panic!(
-            "Error {}: {}",
-            err,
+        panic!("Error {}: {}", err, unsafe {
             CStr::from_ptr(message).to_string_lossy()
-        );
+        });
     }
 
     #[test]

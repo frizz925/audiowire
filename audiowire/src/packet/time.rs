@@ -1,31 +1,12 @@
 use std::time::SystemTime;
 
-use bytes::{Buf, BufMut, TryGetError};
+use audiowire_derive::{Deserialize, Serialize};
 
-use crate::packet::codec::{Decode, Encode};
-
+#[derive(Serialize, Deserialize)]
 pub struct NetworkTime {
     pub origin_timestamp: u64,
     pub receive_timestamp: u64,
     pub transmit_timestamp: u64,
-}
-
-impl Encode for NetworkTime {
-    fn encode(&self, buf: &mut impl BufMut) {
-        buf.put_u64(self.origin_timestamp);
-        buf.put_u64(self.receive_timestamp);
-        buf.put_u64(self.transmit_timestamp);
-    }
-}
-
-impl Decode for NetworkTime {
-    fn decode(buf: &mut impl Buf) -> Result<Self, TryGetError> {
-        Ok(Self {
-            origin_timestamp: buf.try_get_u64()?,
-            receive_timestamp: buf.try_get_u64()?,
-            transmit_timestamp: buf.try_get_u64()?,
-        })
-    }
 }
 
 pub fn get_current_timestamp() -> u64 {

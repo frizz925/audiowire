@@ -1,120 +1,43 @@
-#[derive(Clone, Copy)]
-pub struct StreamType(u8);
+use audiowire_serde::{Deserialize, Serialize};
+use bytes::{Buf, BufMut, TryGetError};
 
-impl StreamType {
-    pub fn new(source: bool, sink: bool) -> Self {
-        let mut value = 0;
-        if source {
-            value |= 1;
-        }
-        if sink {
-            value |= 1 << 1;
-        }
-        Self(value)
-    }
+pub type StreamId = u8;
 
-    #[inline]
-    pub fn is_source(self) -> bool {
-        self.0 & 1 != 0
-    }
-
-    #[inline]
-    pub fn is_sink(self) -> bool {
-        self.0 & (1 << 1) != 0
-    }
-
-    #[inline]
-    pub fn to_bytes(self) -> [u8; 1] {
-        [self.0]
-    }
+pub struct StreamFlags {
+    pub source_enabled: bool,
+    pub sink_enabled: bool,
+    pub opus_enabled: bool,
 }
-
-impl Into<u8> for StreamType {
-    fn into(self) -> u8 {
-        self.0
-    }
-}
-
-impl From<&[u8]> for StreamType {
-    #[inline]
-    fn from(value: &[u8]) -> Self {
-        Self(value[0])
-    }
-}
-
-impl From<[u8; 1]> for StreamType {
-    #[inline]
-    fn from(value: [u8; 1]) -> Self {
-        Self(value[0])
-    }
-}
-
-#[derive(Clone, Copy)]
-pub struct StreamFlags(u8);
 
 impl StreamFlags {
-    pub fn new(stream_type: StreamType, opus_enabled: bool) -> Self {
-        if opus_enabled {
-            Self(stream_type.0 | (1 << 2))
-        } else {
-            Self(stream_type.0)
+    const SOURCE: u8 = 0b0001;
+    const SINK: u8 = 0b0010;
+    const OPUS: u8 = 0b0100;
+}
+
+impl Serialize for StreamFlags {
+    fn serialize(&self, buf: &mut impl BufMut) {
+        let mut flags = 0u8;
+        if self.source_enabled {
+            flags |= Self::SOURCE;
         }
-    }
-
-    #[inline]
-    pub fn stream_type(self) -> StreamType {
-        StreamType(self.0)
-    }
-
-    #[inline]
-    pub fn opus_enabled(self) -> bool {
-        self.0 & (1 << 2) != 0
-    }
-
-    #[inline]
-    pub fn to_bytes(self) -> [u8; 1] {
-        [self.0]
+        if self.sink_enabled {
+            flags |= Self::SINK;
+        }
+        if self.opus_enabled {
+            flags |= Self::OPUS;
+        }
+        buf.put_u8(flags);
     }
 }
 
-impl Default for StreamFlags {
-    #[inline]
-    fn default() -> Self {
-        Self(Default::default())
-    }
-}
-
-impl Into<u8> for StreamFlags {
-    #[inline]
-    fn into(self) -> u8 {
-        self.0
-    }
-}
-
-impl Into<[u8; 1]> for StreamFlags {
-    #[inline]
-    fn into(self) -> [u8; 1] {
-        self.to_bytes()
-    }
-}
-
-impl From<u8> for StreamFlags {
-    #[inline]
-    fn from(value: u8) -> Self {
-        Self(value)
-    }
-}
-
-impl From<&[u8]> for StreamFlags {
-    #[inline]
-    fn from(value: &[u8]) -> Self {
-        Self(value[0])
-    }
-}
-
-impl From<[u8; 1]> for StreamFlags {
-    #[inline]
-    fn from(value: [u8; 1]) -> Self {
-        Self(value[0])
+impl Deserialize for StreamFlags {
+    fn deserialize(buf: &mut impl Buf) -> Result<Self, TryGetError> {
+        let flags = buf.try_get_u8()?;
+        Ok(Self {
+            source_enabled: flags & Self::SOURCE != 0,
+            sink_enabled: flags & Self::SINK != 0,
+            opus_enabled: flags & Self::OPUS != 0,
+        })
     }
 }

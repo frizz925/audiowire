@@ -1,51 +1,28 @@
-use bytes::{Buf, BufMut, TryGetError};
+use audiowire_derive::{Deserialize, Serialize};
 
 use super::{
-    codec::{Decode, Encode},
-    stream::StreamFlags,
+    stream::{StreamFlags, StreamId},
     time::NetworkTime,
 };
 
+/// Handshake packet initiated by the client to the server.
+#[derive(Serialize, Deserialize)]
 pub struct HandshakeInit {
     pub flags: StreamFlags,
     pub timestamp: u64,
 }
 
-impl Encode for HandshakeInit {
-    fn encode(&self, buf: &mut impl BufMut) {
-        buf.put_u8(self.flags.into());
-        buf.put_u64(self.timestamp);
-    }
-}
-
-impl Decode for HandshakeInit {
-    fn decode(buf: &mut impl Buf) -> Result<Self, TryGetError> {
-        Ok(Self {
-            flags: StreamFlags::from(buf.try_get_u8()?),
-            timestamp: buf.try_get_u64()?,
-        })
-    }
-}
-
-pub type HandshakeAck = NetworkTime;
-
+/// Handshake packet sent back from the server after initiated by the client.
+#[derive(Serialize, Deserialize)]
 pub struct HandshakeReply {
+    pub id: StreamId,
     pub flags: StreamFlags,
-    pub ack: HandshakeAck,
+    pub time: NetworkTime,
 }
 
-impl Encode for HandshakeReply {
-    fn encode(&self, buf: &mut impl BufMut) {
-        buf.put_u8(self.flags.into());
-        self.ack.encode(buf);
-    }
-}
-
-impl Decode for HandshakeReply {
-    fn decode(buf: &mut impl Buf) -> Result<Self, TryGetError> {
-        Ok(Self {
-            flags: StreamFlags::from(buf.try_get_u8()?),
-            ack: HandshakeAck::decode(buf)?,
-        })
-    }
+/// Handshake acknowledgement packet sent by the client after receiving reply from the server.
+#[derive(Serialize, Deserialize)]
+pub struct HandshakeAck {
+    pub id: StreamId,
+    pub time: NetworkTime,
 }

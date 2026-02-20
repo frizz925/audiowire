@@ -1,3 +1,16 @@
 [workspace]
 resolver = "2"
-members = ["audiowire","audiowire-sys"]
+members = ["audiowire", "audiowire_sys", "audiowire_derive", "audiowire_serde"]
+
+[workspace.dependencies]
+anyhow = "1.0.102"
+audiowire_derive = { path = "./audiowire_derive" }
+audiowire_serde = { path = "./audiowire_serde" }
+audiowire_sys = { path = "./audiowire_sys" }
+bindgen = "0.72.1"
+bytes = { version = "1.11", default-features = false }
+log = "0.4.29"
+proc-macro2 = "1.0.106"
+quote = "1.0.44"
+syn = "2.0.117"
+tokio = "1.49.0"

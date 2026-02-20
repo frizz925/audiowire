@@ -1,18 +1,20 @@
 [package]
 name = "audiowire"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 
 [dependencies]
-anyhow = { version = "1.0", features = ["backtrace"] }
-audiowire-sys = { path = "../audiowire-sys" }
-bytes = "1.11"
+anyhow = { workspace = true, features = ["backtrace"] }
+audiowire_derive = { workspace = true }
+audiowire_sys = { workspace = true }
+audiowire_serde = { workspace = true }
+bytes = { workspace = true }
 chrono = "0.4"
 clap = "4.5"
 env_logger = { version = "0.11", features = ["kv"] }
-log = { version = "0.4", features = ["kv", "kv_std", "serde"] }
+log = { workspace = true, features = ["kv", "kv_std", "serde"] }
 opus = "0.3"
-tokio = { version = "1.42", features = ["rt-multi-thread", "net", "io-util", "time", "sync", "signal", "macros"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "net", "io-util", "time", "sync", "signal", "macros"] }
 
 [[bin]]
 name = "audiowire-udp-server"

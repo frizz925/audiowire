@@ -10,7 +10,7 @@ use audiowire::{
     packet::{
         codec::{Decode, Encode},
         handshake::{HandshakeAck, HandshakeReply},
-        message::Message,
+        message::{DecodedMessage, EncodedMessage},
         stream::{StreamFlags, StreamType},
         time::get_current_timestamp,
     },
@@ -19,6 +19,11 @@ use bytes::BytesMut;
 use clap::{value_parser, Arg, Command};
 use log::{error, info, warn};
 use tokio::net::UdpSocket;
+
+struct Server {
+    config: DeviceConfig,
+    listener: UdpSocket,
+}
 
 fn cmd() -> Command {
     let cmd = Command::new("audiowire-udp-server")
@@ -54,8 +59,9 @@ fn main() -> Result<()> {
 }
 
 async fn run(config: DeviceConfig, addr: SocketAddr) -> Result<()> {
-    let listener = Arc::new(UdpSocket::bind(addr).await?);
+    let listener = UdpSocket::bind(addr).await?;
     info!("Server listening at {}", addr.to_string());
+    let server = Arc::new(Server { config, listener });
 
     loop {
         let mut buf = BytesMut::with_capacity(2048);
@@ -69,8 +75,7 @@ async fn run(config: DeviceConfig, addr: SocketAddr) -> Result<()> {
         };
         let receive_timestamp = get_current_timestamp();
 
-        let config = config.clone();
-        let sock = Arc::clone(&listener);
+        let server = Arc::clone(&server);
         tokio::spawn(async move {
             if let Err(e) = handle_packet(config, buf, sock, &addr, receive_timestamp).await {
                 error!(error = e.to_string(), addr = addr.to_string(); "Failed to handle packet");
@@ -95,33 +100,32 @@ async fn handle_packet(
         sink_enabled,
         opus_enabled,
     } = config.to_owned();
-    let message = Message::decode(&mut buf)?;
+    let message = DecodedMessage::decode(&mut buf)?;
     buf.clear();
 
     match message {
-        Message::HandshakeInit(init) => {
+        DecodedMessage::HandshakeInit(init) => {
             info!(
                 addr = addr.to_string(),
                 timestamp = init.timestamp;
                 "Got handshake init"
             );
 
-            Message::from(HandshakeReply {
-                flags: StreamFlags::new(
-                    StreamType::new(source_enabled, sink_enabled),
-                    opus_enabled,
-                ),
-                ack: HandshakeAck {
+            HandshakeReply {
+                id: 0,
+                flags: StreamFlags::new(source_enabled, sink_enabled, opus_enabled),
+                time: HandshakeAck {
                     origin_timestamp: init.timestamp,
                     receive_timestamp,
                     transmit_timestamp: get_current_timestamp(),
                 },
-            })
+            }
+            .into::<EncodedMessage>()
             .encode(&mut buf);
             sock.send_to(&buf, addr).await?;
             buf.clear();
         }
-        Message::HandshakeAck(ack) => {
+        DecodedMessage::HandshakeAck(ack) => {
             info!(
                 addr = addr.to_string(),
                 origin_timestamp = ack.origin_timestamp,
