@@ -1,28 +1,103 @@
 use std::{
     net::{IpAddr, SocketAddr},
-    sync::Arc,
+    sync::{Arc, atomic::Ordering},
 };
 
 use anyhow::{Ok as _Ok, Result};
 use audiowire::{
-    command::{add_device_args, DeviceConfig},
+    command::{DeviceConfig, add_device_args},
     logging,
     packet::{
-        codec::{Decode, Encode},
-        handshake::{HandshakeAck, HandshakeReply},
-        message::{DecodedMessage, EncodedMessage},
-        stream::{StreamFlags, StreamType},
-        time::get_current_timestamp,
+        handshake::{HandshakeAck, HandshakeInit, HandshakeReply},
+        message::{DecodedMessage, Pack},
+        stream::{AtomicStreamId, StreamFlags},
+        time::{NetworkTime, get_current_timestamp},
     },
 };
-use bytes::BytesMut;
-use clap::{value_parser, Arg, Command};
+use audiowire_serde::Deserialize;
+use bytes::{Buf, BytesMut};
+use clap::{Arg, Command, value_parser};
 use log::{error, info, warn};
 use tokio::net::UdpSocket;
 
 struct Server {
     config: DeviceConfig,
-    listener: UdpSocket,
+    sock: UdpSocket,
+
+    next_stream_id: AtomicStreamId,
+}
+
+impl Server {
+    fn new(config: DeviceConfig, sock: UdpSocket) -> Self {
+        Self {
+            config,
+            sock,
+            next_stream_id: AtomicStreamId::new(1),
+        }
+    }
+
+    async fn handle_packet(
+        &self,
+        addr: &SocketAddr,
+        mut buf: impl Buf,
+        receive_timestamp: u64,
+    ) -> Result<()> {
+        let DeviceConfig {
+            source_name: _1,
+            sink_name: _2,
+            source_enabled,
+            sink_enabled,
+            opus_enabled,
+        } = self.config.to_owned();
+        let message = DecodedMessage::deserialize(&mut buf)?;
+
+        match message {
+            DecodedMessage::HandshakeInit(init) => {
+                let HandshakeInit { flags, timestamp } = init;
+                info!(
+                    addr = addr.to_string(),
+                    stream_flags = flags.raw(),
+                    timestamp;
+                    "Got handshake init"
+                );
+
+                let reply = HandshakeReply {
+                    id: self.next_stream_id.fetch_add(1, Ordering::Acquire),
+                    flags: StreamFlags {
+                        source_enabled,
+                        sink_enabled,
+                        opus_enabled,
+                    },
+                    time: NetworkTime {
+                        origin_timestamp: init.timestamp,
+                        receive_timestamp,
+                        transmit_timestamp: get_current_timestamp(),
+                    },
+                };
+                self.sock.send_to(reply.pack().as_ref(), addr).await?;
+            }
+            DecodedMessage::HandshakeAck(ack) => {
+                let HandshakeAck {
+                    id: stream_id,
+                    time,
+                } = ack;
+                info!(
+                    addr = addr.to_string(),
+                    stream_id,
+                    origin_timestamp = time.origin_timestamp,
+                    receive_timestamp = time.receive_timestamp,
+                    transmit_timestamp = time.transmit_timestamp;
+                    "Got handshake ack"
+                );
+            }
+            DecodedMessage::Unknown(code) => {
+                warn!(addr = addr.to_string(); "Got unknown message code: {}", code)
+            }
+            _ => (),
+        }
+
+        Ok(())
+    }
 }
 
 fn cmd() -> Command {
@@ -59,10 +134,11 @@ fn main() -> Result<()> {
 }
 
 async fn run(config: DeviceConfig, addr: SocketAddr) -> Result<()> {
-    let listener = UdpSocket::bind(addr).await?;
+    let sock = UdpSocket::bind(addr).await?;
     info!("Server listening at {}", addr.to_string());
-    let server = Arc::new(Server { config, listener });
+    let server = Arc::new(Server::new(config, sock));
 
+    let listener = &server.sock;
     loop {
         let mut buf = BytesMut::with_capacity(2048);
         let (_, addr) = tokio::select! {
@@ -77,65 +153,11 @@ async fn run(config: DeviceConfig, addr: SocketAddr) -> Result<()> {
 
         let server = Arc::clone(&server);
         tokio::spawn(async move {
-            if let Err(e) = handle_packet(config, buf, sock, &addr, receive_timestamp).await {
+            if let Err(e) = server.handle_packet(&addr, buf, receive_timestamp).await {
                 error!(error = e.to_string(), addr = addr.to_string(); "Failed to handle packet");
             }
         });
     }
 
     _Ok(())
-}
-
-async fn handle_packet(
-    config: DeviceConfig,
-    mut buf: BytesMut,
-    sock: Arc<UdpSocket>,
-    addr: &SocketAddr,
-    receive_timestamp: u64,
-) -> Result<()> {
-    let DeviceConfig {
-        source_name: _1,
-        sink_name: _2,
-        source_enabled,
-        sink_enabled,
-        opus_enabled,
-    } = config.to_owned();
-    let message = DecodedMessage::decode(&mut buf)?;
-    buf.clear();
-
-    match message {
-        DecodedMessage::HandshakeInit(init) => {
-            info!(
-                addr = addr.to_string(),
-                timestamp = init.timestamp;
-                "Got handshake init"
-            );
-
-            HandshakeReply {
-                id: 0,
-                flags: StreamFlags::new(source_enabled, sink_enabled, opus_enabled),
-                time: HandshakeAck {
-                    origin_timestamp: init.timestamp,
-                    receive_timestamp,
-                    transmit_timestamp: get_current_timestamp(),
-                },
-            }
-            .into::<EncodedMessage>()
-            .encode(&mut buf);
-            sock.send_to(&buf, addr).await?;
-            buf.clear();
-        }
-        DecodedMessage::HandshakeAck(ack) => {
-            info!(
-                addr = addr.to_string(),
-                origin_timestamp = ack.origin_timestamp,
-                receive_timestamp = ack.receive_timestamp,
-                transmit_timestamp = ack.transmit_timestamp;
-                "Got handshake ack"
-            );
-        }
-        _ => warn!(addr = addr.to_string(); "Got unknown message"),
-    }
-
-    Ok(())
 }

@@ -1,7 +1,11 @@
+use std::sync::atomic::AtomicU8;
+
 use audiowire_serde::{Deserialize, Serialize};
 use bytes::{Buf, BufMut, TryGetError};
 
 pub type StreamId = u8;
+
+pub type AtomicStreamId = AtomicU8;
 
 pub struct StreamFlags {
     pub source_enabled: bool,
@@ -17,17 +21,7 @@ impl StreamFlags {
 
 impl Serialize for StreamFlags {
     fn serialize(&self, buf: &mut impl BufMut) {
-        let mut flags = 0u8;
-        if self.source_enabled {
-            flags |= Self::SOURCE;
-        }
-        if self.sink_enabled {
-            flags |= Self::SINK;
-        }
-        if self.opus_enabled {
-            flags |= Self::OPUS;
-        }
-        buf.put_u8(flags);
+        buf.put_u8(self.raw());
     }
 }
 
@@ -39,5 +33,21 @@ impl Deserialize for StreamFlags {
             sink_enabled: flags & Self::SINK != 0,
             opus_enabled: flags & Self::OPUS != 0,
         })
+    }
+}
+
+impl StreamFlags {
+    pub fn raw(&self) -> u8 {
+        let mut flags = 0u8;
+        if self.source_enabled {
+            flags |= Self::SOURCE;
+        }
+        if self.sink_enabled {
+            flags |= Self::SINK;
+        }
+        if self.opus_enabled {
+            flags |= Self::OPUS;
+        }
+        flags
     }
 }

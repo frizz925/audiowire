@@ -5,16 +5,16 @@ use std::{
 
 use anyhow::{Ok as _Ok, Result};
 use audiowire::{
-    command::{add_device_args, DeviceConfig},
+    command::{DeviceConfig, add_device_args},
     logging,
     packet::{
-        codec::{Decode, Encode},
-        handshake::{HandshakeAck, HandshakeInit},
-        message::DecodedMessage,
-        stream::{StreamFlags, StreamType},
-        time::get_current_timestamp,
+        handshake::{HandshakeAck, HandshakeInit, HandshakeReply},
+        message::{DecodedMessage, Pack},
+        stream::StreamFlags,
+        time::{NetworkTime, get_current_timestamp},
     },
 };
+use audiowire_serde::Deserialize;
 use bytes::BytesMut;
 use clap::{Arg, Command};
 use log::{error, info};
@@ -59,41 +59,51 @@ async fn run(config: DeviceConfig, addr: SocketAddr) -> Result<ExitCode> {
     let mut buf = BytesMut::with_capacity(2048);
     let sock = UdpSocket::bind(":::0").await?;
 
-    DecodedMessage::from(HandshakeInit {
-        flags: StreamFlags::new(StreamType::new(source_enabled, sink_enabled), opus_enabled),
+    let init = HandshakeInit {
+        flags: StreamFlags {
+            source_enabled,
+            sink_enabled,
+            opus_enabled,
+        },
         timestamp: get_current_timestamp(),
-    })
-    .encode(&mut buf);
-    sock.send_to(&buf, &addr).await?;
-    buf.clear();
+    };
+    sock.send_to(init.pack().as_ref(), &addr).await?;
 
     // TODO: Check if packet coming from server address
     let (_, addr) = sock.recv_buf_from(&mut buf).await?;
     let receive_timestamp = get_current_timestamp();
-    let message = DecodedMessage::decode(&mut buf)?;
+    let message = DecodedMessage::deserialize(&mut buf)?;
     buf.clear();
 
-    let reply = if let DecodedMessage::HandshakeReply(reply) = message {
+    let HandshakeReply {
+        id: stream_id,
+        flags,
+        time,
+    } = if let DecodedMessage::HandshakeReply(reply) = message {
         reply
     } else {
         error!("We should get handshake reply here");
         return _Ok(ExitCode::FAILURE);
     };
+
     info!(
-        origin_timestamp = reply.time.origin_timestamp,
-        receive_timestamp = reply.time.receive_timestamp,
-        transmit_timestamp = reply.time.transmit_timestamp;
+        stream_id,
+        stream_flags = flags.raw(),
+        origin_timestamp = time.origin_timestamp,
+        receive_timestamp = time.receive_timestamp,
+        transmit_timestamp = time.transmit_timestamp;
         "Got handshake reply"
     );
 
-    DecodedMessage::from(HandshakeAck {
-        origin_timestamp: reply.time.transmit_timestamp,
-        receive_timestamp,
-        transmit_timestamp: get_current_timestamp(),
-    })
-    .encode(&mut buf);
-    sock.send_to(&buf, addr).await?;
-    buf.clear();
+    let ack = HandshakeAck {
+        id: stream_id,
+        time: NetworkTime {
+            origin_timestamp: time.transmit_timestamp,
+            receive_timestamp,
+            transmit_timestamp: get_current_timestamp(),
+        },
+    };
+    sock.send_to(ack.pack().as_ref(), addr).await?;
 
     _Ok(ExitCode::SUCCESS)
 }

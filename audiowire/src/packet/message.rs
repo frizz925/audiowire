@@ -1,33 +1,51 @@
 use audiowire_serde::{Deserialize, Serialize};
-use bytes::{Buf, BufMut, TryGetError};
+use bytes::{Buf, BufMut, Bytes, BytesMut, TryGetError};
 
 use super::handshake;
+
+pub trait IntoMessage: Sized {
+    fn into_message(self) -> EncodedMessage<Self>;
+}
+
+pub trait Pack {
+    fn pack(self) -> Bytes;
+}
 
 pub struct EncodedMessage<T> {
     code: u8,
     message: T,
 }
 
-impl<T> Serialize for EncodedMessage<T>
-where
-    T: Serialize,
-{
+impl<T: Serialize> Serialize for EncodedMessage<T> {
     fn serialize(&self, buf: &mut impl BufMut) {
         buf.put_u8(self.code);
-        Serialize::serialize(&self.message, buf);
+        self.message.serialize(buf);
+    }
+}
+
+impl<T: Serialize> Pack for EncodedMessage<T> {
+    fn pack(self) -> Bytes {
+        let mut buf = BytesMut::with_capacity(2048);
+        self.serialize(&mut buf);
+        buf.freeze()
+    }
+}
+
+impl<T: Serialize + IntoMessage> Pack for T {
+    fn pack(self) -> Bytes {
+        self.into_message().pack()
     }
 }
 
 macro_rules! message_types {
     (
         $(
-            $(#[$docs:meta])*
-            ($code:expr, $name:ident, $type:ty);
+            ($code:expr, $name:ident, $type:ty),
         )+
     ) => {
         #[non_exhaustive]
         pub enum DecodedMessage {
-            Unknown,
+            Unknown(u8),
             $(
                 $name($type),
             )+
@@ -36,7 +54,7 @@ macro_rules! message_types {
         impl DecodedMessage {
             pub fn code(&self) -> u8 {
                 match self {
-                    Self::Unknown => 0,
+                    Self::Unknown(code) => *code,
                     $(
                         Self::$name(_) => $code,
                     )+
@@ -50,13 +68,19 @@ macro_rules! message_types {
                     $(
                         $code => Self::$name(<$type as Deserialize>::deserialize(buf)?),
                     )+
-                    _ => Self::Unknown,
+                    code => Self::Unknown(code),
                 };
                 Ok(message)
             }
         }
 
         $(
+            impl IntoMessage for $type {
+                fn into_message(self) -> EncodedMessage<Self> {
+                    EncodedMessage::from(self)
+                }
+            }
+
             impl From<$type> for EncodedMessage<$type> {
                 fn from(value: $type) -> Self {
                     Self { code: $code, message: value }
@@ -67,7 +91,7 @@ macro_rules! message_types {
 }
 
 message_types! {
-    (1, HandshakeInit, handshake::HandshakeInit);
-    (2, HandshakeReply, handshake::HandshakeReply);
-    (3, HandshakeAck, handshake::HandshakeAck);
+    (1, HandshakeInit, handshake::HandshakeInit),
+    (2, HandshakeReply, handshake::HandshakeReply),
+    (3, HandshakeAck, handshake::HandshakeAck),
 }

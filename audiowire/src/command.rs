@@ -19,6 +19,7 @@ pub fn add_device_args(cmd: Command) -> Command {
         Arg::new("disable-source")
             .long("disable-source")
             .conflicts_with("source")
+            .conflicts_with("disable-sink")
             .action(ArgAction::SetTrue)
             .help("Don't use any audio device as source"),
     )
@@ -26,6 +27,7 @@ pub fn add_device_args(cmd: Command) -> Command {
         Arg::new("disable-sink")
             .long("disable-sink")
             .conflicts_with("sink")
+            .conflicts_with("disable-source")
             .action(ArgAction::SetTrue)
             .help("Don't use any audio device as sink"),
     )
