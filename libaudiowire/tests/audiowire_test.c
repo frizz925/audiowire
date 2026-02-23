@@ -1,7 +1,7 @@
-
-#include "audiowire.h"
+#include "../include/audiowire2.h"
 
 #include <assert.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -24,13 +24,22 @@ void check_aw_result(aw_result_t res, const char *function, const char *filename
     abort();
 }
 
+void on_read(const char *buf, size_t len, void *userdata) {
+    (void)(buf);
+    *((atomic_size_t *)userdata) += len;
+}
+
+void on_write(char *buf, size_t len, void *userdata) {
+    (void)(buf);
+    *((atomic_size_t *)userdata) += len;
+}
+
 void on_error(int err, const char *message, void *userdata) {
     (void)(userdata);
     printf("Error %d: %s\n", err, message);
 }
 
 int main() {
-    char buf[AUDIO_BUFSIZE];
     aw_stream_t *record, *playback;
     aw_config_t config = {
         .channels = CHANNELS,
@@ -39,11 +48,13 @@ int main() {
         .buffer_frames = PACKET_FRAME_SIZE,
         .max_buffer_frames = BUFFER_FRAME_SIZE,
     };
-    size_t bufsize = sizeof(buf);
+
+    atomic_size_t read_bytes = 0;
+    atomic_size_t write_bytes = 0;
 
     assert_aw_result(aw_initialize());
-    assert_aw_result(aw_start_record(&record, NULL, "record-test", config, on_error, NULL));
-    assert_aw_result(aw_start_playback(&playback, NULL, "playback-test", config, on_error, NULL));
+    assert_aw_result(aw_start(&record, NULL, "record-test", config, on_read, NULL, on_error, &read_bytes));
+    assert_aw_result(aw_start(&playback, NULL, "playback-test", config, NULL, on_write, on_error, &write_bytes));
 
     assert(aw_device_name(record) != NULL);
     assert(aw_sample_rate(record) > 0);
@@ -51,14 +62,9 @@ int main() {
     assert(aw_device_name(playback) != NULL);
     assert(aw_sample_rate(playback) > 0);
 
-    size_t read = 0;
     for (;;) {
-        read = aw_record_read(record, buf, bufsize);
-        if (read > 0) {
-            size_t write = aw_playback_write(playback, buf, read);
-            assert(read == write);
+        if (read_bytes > 0 && write_bytes > 0)
             break;
-        }
         usleep(20 * 1000);
     }
 

@@ -1,29 +1,38 @@
-use proc_macro2::TokenStream;
+use proc_macro2::{Literal, TokenStream};
 use quote::quote;
-use syn::{DeriveInput, Error, Field, Ident, Result};
+use syn::{Data, DeriveInput, Error, Field, Generics, Ident, Result};
 
 pub fn expand_derive_serialize(input: DeriveInput) -> Result<TokenStream> {
-    let name = &input.ident;
+    let DeriveInput {
+        ident, generics, ..
+    } = &input;
 
-    let _self = Ident::new("self", name.span());
-    let buf = Ident::new("buf", name.span());
+    let _self = Ident::new("self", ident.span());
+    let buf = Ident::new("buf", ident.span());
     let body = match input.data {
-        syn::Data::Struct(ref data) => serialize_body(&buf, &_self, data.fields.iter()),
-        syn::Data::Union(ref data) => serialize_body(&buf, &_self, data.fields.named.iter()),
-        syn::Data::Enum(_) => {
+        Data::Struct(ref data) => serialize_body(&buf, &_self, data.fields.iter()),
+        Data::Union(ref data) => serialize_body(&buf, &_self, data.fields.named.iter()),
+        Data::Enum(_) => {
             return Err(Error::new(
-                name.span(),
+                ident.span(),
                 "Derive `Serialize` for Enum is not supported yet",
             ));
         }
     };
 
-    Ok(serialize_impl(name, buf, body))
+    Ok(serialize_impl(ident, generics, buf, body))
 }
 
-fn serialize_impl(name: &Ident, buf: Ident, body: TokenStream) -> TokenStream {
+fn serialize_impl(
+    ident: &Ident,
+    generics: &Generics,
+    buf: Ident,
+    body: TokenStream,
+) -> TokenStream {
+    let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
     quote! {
-        impl audiowire_serde::Serialize for #name {
+        #[automatically_derived]
+        impl #impl_generics audiowire_serde::Serialize for #ident #ty_generics #where_clause {
             fn serialize(&self, #buf: &mut impl bytes::BufMut) {
                 #body
             }
@@ -47,10 +56,11 @@ fn serialize_body<'a>(
 }
 
 fn serialize_buf(buf: &Ident, name: &Ident, field: &Field, index: usize) -> TokenStream {
-    let field_expr = if let Some(ident) = field.ident.as_ref() {
+    let field = if let Some(ident) = field.ident.as_ref() {
         quote!(#name.#ident)
     } else {
+        let index = Literal::usize_unsuffixed(index);
         quote!(#name.#index)
     };
-    quote!(audiowire_serde::Serialize::serialize(&#field_expr, #buf))
+    quote!(audiowire_serde::Serialize::serialize(&#field, #buf))
 }

@@ -1,8 +1,7 @@
 #ifndef _INTERNALS_H_
 #define _INTERNALS_H_
 
-#include "../include/audiowire.h"
-#include "../include/ringbuf.h"
+#include "../include/audiowire2.h"
 
 #include <stddef.h>
 #include <stdlib.h>
@@ -13,11 +12,11 @@
 #define AW_RESULT_DEVICE_NOT_FOUND aw_result(-1, "Device not found")
 
 typedef struct aw_stream_base {
-    ringbuf_t *ringbuf;
+    aw_config_t config;
     const char *devname;
     uint32_t sample_rate;
-    size_t max_bufsize;
-    aw_config_t config;
+    aw_read_callback_t read_cb;
+    aw_write_callback_t write_cb;
     aw_error_callback_t error_cb;
     void *userdata;
 } aw_stream_base_t;
@@ -44,24 +43,28 @@ static inline aw_result_t aw_result(int code, const char *message) {
 static inline void aw_stream_base_init(aw_stream_base_t *base,
                                        aw_config_t cfg,
                                        const char *devname,
+                                       aw_read_callback_t read_cb,
+                                       aw_write_callback_t write_cb,
                                        aw_error_callback_t error_cb,
                                        void *userdata) {
-    base->max_bufsize = frame_buffer_size(&cfg, cfg.max_buffer_frames);
-    base->ringbuf = ringbuf_create(base->max_bufsize);
     base->config = cfg;
     base->devname = devname;
     base->sample_rate = 0;
+    base->read_cb = read_cb;
+    base->write_cb = write_cb;
     base->error_cb = error_cb;
     base->userdata = userdata;
 }
 
 static inline void aw_stream_base_deinit(aw_stream_base_t *base) {
-    if (base->ringbuf)
-        ringbuf_free(base->ringbuf);
-    base->ringbuf = NULL;
-    base->devname = NULL;
-    base->max_bufsize = 0;
     memset(&base->config, 0, sizeof(aw_config_t));
+
+    base->devname = NULL;
+    base->sample_rate = 0;
+    base->read_cb = NULL;
+    base->write_cb = NULL;
+    base->error_cb = NULL;
+    base->userdata = NULL;
 }
 
 static inline void aw_stream_base_error(aw_stream_base_t *base, int err, const char *message) {

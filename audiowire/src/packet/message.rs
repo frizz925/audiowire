@@ -12,8 +12,8 @@ pub trait Pack {
 }
 
 pub struct EncodedMessage<T> {
-    code: u8,
-    message: T,
+    pub code: u8,
+    pub message: T,
 }
 
 impl<T: Serialize> Serialize for EncodedMessage<T> {
@@ -37,6 +37,18 @@ impl<T: Serialize + IntoMessage> Pack for T {
     }
 }
 
+/*
+impl Deserialize for DecodedMessage {
+    fn deserialize(buf: &mut impl Buf) -> Result<Self, TryGetError> {
+        let message = match buf.try_get_u8()? {
+            10 => Self::Data(buf.copy_to_bytes(buf.remaining())),
+            code => Self::Unknown(code),
+        };
+        Ok(message)
+    }
+}
+*/
+
 macro_rules! message_types {
     (
         $(
@@ -45,19 +57,21 @@ macro_rules! message_types {
     ) => {
         #[non_exhaustive]
         pub enum DecodedMessage {
-            Unknown(u8),
             $(
                 $name($type),
             )+
+            Data(Bytes),
+            Unknown(u8),
         }
 
         impl DecodedMessage {
             pub fn code(&self) -> u8 {
                 match self {
-                    Self::Unknown(code) => *code,
                     $(
                         Self::$name(_) => $code,
                     )+
+                    Self::Data(_) => 10,
+                    Self::Unknown(code) => *code,
                 }
             }
         }
@@ -68,6 +82,7 @@ macro_rules! message_types {
                     $(
                         $code => Self::$name(<$type as Deserialize>::deserialize(buf)?),
                     )+
+                    10 => Self::Data(buf.copy_to_bytes(buf.remaining())),
                     code => Self::Unknown(code),
                 };
                 Ok(message)

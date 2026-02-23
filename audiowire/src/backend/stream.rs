@@ -1,24 +1,74 @@
 use std::{
     ffi::{CStr, CString, c_char, c_int},
     os::raw::c_void,
-    ptr,
+    ptr, slice,
 };
 
 use audiowire_sys::*;
 
 use super::{
     config::Config,
-    result::{Result, parse_result_lazy, parse_result_value},
+    result::{Result, parse_result_lazy},
 };
 
-pub struct BaseStream {
-    handle: *mut aw_stream,
-    devname: Option<String>,
-    running: bool,
+pub trait ReadFn: FnMut(&[u8]) + 'static {}
+pub trait WriteFn: FnMut(&mut [u8]) + 'static {}
+pub trait ErrorFn: FnMut(i32, &str) + 'static {}
+
+impl<F: FnMut(&[u8]) + 'static> ReadFn for F {}
+impl<F: FnMut(&mut [u8]) + 'static> WriteFn for F {}
+impl<F: FnMut(i32, &str) + 'static> ErrorFn for F {}
+
+type ReadCallback = Box<dyn ReadFn>;
+type WriteCallback = Box<dyn WriteFn>;
+type ErrorCallback = Box<dyn ErrorFn>;
+
+pub struct Callbacks {
+    read_cb: Option<ReadCallback>,
+    write_cb: Option<WriteCallback>,
+    error_cb: Option<ErrorCallback>,
 }
 
-impl BaseStream {
-    fn new(handle: *mut aw_stream) -> Self {
+macro_rules! callback {
+    ($ptr:ident, $name:ident $($e:tt)*) => {
+        if let Some(callbacks) = unsafe { ($ptr as *mut Callbacks).as_mut() } {
+            if let Some($name) = callbacks.$name.as_mut() {
+                $name$($e)*
+            }
+        }
+    };
+}
+
+unsafe extern "C" fn on_read(buf: *const c_char, len: usize, userdata: *mut c_void) {
+    let slice = unsafe { slice::from_raw_parts(buf as *const u8, len) };
+    callback!(userdata, read_cb(slice));
+}
+
+unsafe extern "C" fn on_write(buf: *mut c_char, len: usize, userdata: *mut c_void) {
+    let slice = unsafe { slice::from_raw_parts_mut(buf as *mut u8, len) };
+    callback!(userdata, write_cb(slice));
+}
+
+unsafe extern "C" fn on_error(err: c_int, message: *const c_char, userdata: *mut c_void) {
+    callback!(
+        userdata,
+        error_cb(
+            err as i32,
+            unsafe { CStr::from_ptr(message) }
+                .to_str()
+                .unwrap_or_default(),
+        )
+    );
+}
+
+pub struct Stream {
+    handle: *mut aw_stream,
+    devname: Option<String>,
+    userdata: *mut Callbacks,
+}
+
+impl Stream {
+    fn new(handle: *mut aw_stream, userdata: *mut Callbacks) -> Self {
         let devname = unsafe {
             let cstr = aw_device_name(handle);
             if !cstr.is_null() {
@@ -30,194 +80,72 @@ impl BaseStream {
         Self {
             handle,
             devname,
-            running: true,
+            userdata,
         }
     }
-}
 
-pub trait StreamInternal {
-    fn base(&self) -> &BaseStream;
-    fn base_mut(&mut self) -> &mut BaseStream;
-}
+    pub fn start<N, D>(
+        name: N,
+        device: Option<D>,
+        config: Config,
+        callbacks: Callbacks,
+    ) -> Result<Self>
+    where
+        N: Into<Vec<u8>>,
+        D: Into<Vec<u8>>,
+    {
+        let mut stream: *mut aw_stream = ptr::null_mut();
+        let cdev = device
+            .map(|s| CString::new(s).unwrap().into_raw())
+            .unwrap_or(ptr::null_mut());
 
-pub trait Stream: StreamInternal + Sized {
-    fn start(name: &str, device: Option<&str>, config: Config) -> Result<Self>;
+        let read_cb = callbacks.read_cb.is_some();
+        let write_cb = callbacks.write_cb.is_some();
+        let error_cb = callbacks.error_cb.is_some();
 
-    #[inline]
-    fn capacity(&self) -> usize {
-        unsafe { aw_buffer_capacity(self.base().handle) }
-    }
-
-    #[inline]
-    fn device_name(&self) -> Option<&str> {
-        self.base().devname.as_deref()
-    }
-
-    #[inline]
-    fn sample_rate(&self) -> u32 {
-        unsafe { aw_sample_rate(self.base().handle) }
-    }
-
-    fn peek(&self) -> usize;
-
-    // Stop is idempotent
-    fn stop(&mut self) -> Result<()> {
-        let base = self.base_mut();
-        if base.running {
-            unsafe { parse_result_lazy(aw_stop(base.handle), || base.running = false) }
-        } else {
-            Ok(())
-        }
-    }
-}
-
-pub struct RecordStream {
-    base: BaseStream,
-}
-
-impl RecordStream {
-    #[inline]
-    pub fn read(&mut self, buf: &mut [u8]) -> usize {
-        unsafe { aw_record_read(self.base.handle, buf.as_mut_ptr() as *mut c_char, buf.len()) }
-    }
-}
-
-impl StreamInternal for RecordStream {
-    #[inline]
-    fn base(&self) -> &BaseStream {
-        &self.base
-    }
-
-    #[inline]
-    fn base_mut(&mut self) -> &mut BaseStream {
-        &mut self.base
-    }
-}
-
-impl Stream for RecordStream {
-    #[inline]
-    fn start(name: &str, device: Option<&str>, config: Config) -> Result<Self> {
-        StreamBuilder::new(config).start_record(name, device)
-    }
-
-    #[inline]
-    fn peek(&self) -> usize {
-        unsafe { aw_record_peek(self.base.handle) }
-    }
-}
-
-unsafe impl Sync for RecordStream {}
-unsafe impl Send for RecordStream {}
-
-pub struct PlaybackStream {
-    base: BaseStream,
-}
-
-impl PlaybackStream {
-    #[inline]
-    pub fn write(&mut self, buf: &[u8]) -> usize {
-        unsafe { aw_playback_write(self.base.handle, buf.as_ptr() as *mut c_char, buf.len()) }
-    }
-}
-
-impl StreamInternal for PlaybackStream {
-    #[inline]
-    fn base(&self) -> &BaseStream {
-        &self.base
-    }
-
-    #[inline]
-    fn base_mut(&mut self) -> &mut BaseStream {
-        &mut self.base
-    }
-}
-
-impl Stream for PlaybackStream {
-    #[inline]
-    fn start(name: &str, device: Option<&str>, config: Config) -> Result<Self> {
-        StreamBuilder::new(config).start_playback(name, device)
-    }
-
-    #[inline]
-    fn peek(&self) -> usize {
-        unsafe { aw_playback_peek(self.base.handle) }
-    }
-}
-
-unsafe impl Sync for PlaybackStream {}
-unsafe impl Send for PlaybackStream {}
-
-pub type ErrorCallback = fn(err: i32, message: &str, userdata: *mut c_void);
-
-struct ErrorHandle {
-    error_cb: ErrorCallback,
-    userdata: *mut c_void,
-}
-
-unsafe extern "C" fn on_error(err: c_int, message: *const c_char, userdata: *mut c_void) {
-    let handle = unsafe { &ptr::read(userdata as *mut ErrorHandle) };
-    (handle.error_cb)(
-        err as i32,
-        unsafe { CStr::from_ptr(message) }
-            .to_str()
-            .unwrap_or_default(),
-        handle.userdata,
-    );
-}
-
-type StartStreamFn = unsafe extern "C" fn(
-    stream: *mut *mut aw_stream,
-    devname: *const c_char,
-    name: *const c_char,
-    cfg: aw_config,
-    error_cb: aw_error_callback_t,
-    userdata: *mut c_void,
-) -> aw_result;
-
-unsafe fn start_stream(
-    start_fn: StartStreamFn,
-    device: Option<&str>,
-    name: &str,
-    config: Config,
-    error_cb: Option<ErrorCallback>,
-    userdata: *mut c_void,
-) -> Result<*mut aw_stream> {
-    let mut stream: *mut aw_stream = ptr::null_mut();
-    let cdev = device
-        .map(|s| CString::new(s).unwrap().into_raw())
-        .unwrap_or(ptr::null_mut());
-    let cname = CString::new(name).unwrap().into_raw();
-    let result = if let Some(error_cb) = error_cb {
-        let handle = Box::into_raw(Box::new(ErrorHandle { error_cb, userdata }));
-        unsafe {
-            start_fn(
+        let cname = CString::new(name).unwrap().into_raw();
+        let userdata = Box::into_raw(Box::new(callbacks));
+        let result = unsafe {
+            aw_start(
                 &mut stream,
                 cdev,
                 cname,
                 config.into(),
-                Some(on_error),
-                handle as *mut c_void,
+                if read_cb { Some(on_read) } else { None },
+                if write_cb { Some(on_write) } else { None },
+                if error_cb { Some(on_error) } else { None },
+                userdata as *mut c_void,
             )
-        }
-    } else {
-        unsafe {
-            start_fn(
-                &mut stream,
-                cdev,
-                cname,
-                config.into(),
-                None,
-                ptr::null_mut(),
-            )
-        }
-    };
-    parse_result_value(result, stream)
+        };
+        parse_result_lazy(result, || Stream::new(stream, userdata))
+    }
+
+    #[inline]
+    pub fn device_name(&self) -> Option<&str> {
+        self.devname.as_deref()
+    }
+
+    #[inline]
+    pub fn sample_rate(&self) -> u32 {
+        unsafe { aw_sample_rate(self.handle) }
+    }
 }
+
+impl Drop for Stream {
+    fn drop(&mut self) {
+        unsafe {
+            aw_stop(self.handle);
+            ptr::drop_in_place(self.userdata);
+        }
+    }
+}
+
+unsafe impl Sync for Stream {}
+unsafe impl Send for Stream {}
 
 pub struct StreamBuilder {
     config: Config,
-    error_cb: Option<ErrorCallback>,
-    userdata: *mut c_void,
+    callbacks: Callbacks,
 }
 
 impl StreamBuilder {
@@ -225,49 +153,44 @@ impl StreamBuilder {
     pub fn new(config: Config) -> Self {
         Self {
             config,
-            error_cb: None,
-            userdata: ptr::null_mut(),
+            callbacks: Callbacks {
+                read_cb: None,
+                write_cb: None,
+                error_cb: None,
+            },
         }
     }
 
     #[inline]
-    pub fn error_cb<T>(mut self, error_cb: ErrorCallback, userdata: Option<T>) -> Self {
-        self.error_cb = Some(error_cb);
-        self.userdata = userdata
-            .map(|v| Box::into_raw(Box::new(v)) as *mut c_void)
-            .unwrap_or_else(|| ptr::null_mut());
+    pub fn read_cb(mut self, read_cb: impl ReadFn + 'static) -> Self {
+        self.callbacks.read_cb = Some(Box::new(read_cb));
         self
     }
 
     #[inline]
-    pub fn start_record(self, name: &str, device: Option<&str>) -> Result<RecordStream> {
-        self.start_stream(aw_start_record, name, device)
-            .map(|base| RecordStream { base })
+    pub fn write_cb(mut self, write_cb: impl WriteFn + 'static) -> Self {
+        self.callbacks.write_cb = Some(Box::new(write_cb));
+        self
     }
 
     #[inline]
-    pub fn start_playback(self, name: &str, device: Option<&str>) -> Result<PlaybackStream> {
-        self.start_stream(aw_start_playback, name, device)
-            .map(|base| PlaybackStream { base })
+    pub fn error_cb(mut self, error_cb: impl ErrorFn + 'static) -> Self {
+        self.callbacks.error_cb = Some(Box::new(error_cb));
+        self
     }
 
     #[inline]
-    fn start_stream(
-        self,
-        start_fn: StartStreamFn,
-        name: &str,
-        device: Option<&str>,
-    ) -> Result<BaseStream> {
-        let result = unsafe {
-            start_stream(
-                start_fn,
-                device,
-                name,
-                self.config,
-                self.error_cb,
-                self.userdata,
-            )
-        };
-        result.map(|s| BaseStream::new(s))
+    pub fn start<N, D>(self, name: N, device: Option<D>) -> Result<Stream>
+    where
+        N: Into<Vec<u8>>,
+        D: Into<Vec<u8>>,
+    {
+        Stream::start(name, device, self.config, self.callbacks)
+    }
+}
+
+impl Default for StreamBuilder {
+    fn default() -> Self {
+        Self::new(Config::default())
     }
 }

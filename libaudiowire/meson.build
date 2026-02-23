@@ -1,8 +1,8 @@
-project('libaudiowire', 'c', version: '0.1.0')
+project('libaudiowire', 'c', version: '0.2.0')
 
 compiler = meson.get_compiler('c')
 
-src = ['src/common.c', 'src/ringbuf.c']
+src = ['src/common.c']
 inc = include_directories('include')
 test_deps = []
 deps = []
@@ -17,7 +17,7 @@ else
 endif
 
 lib = library(
-    'audiowire',
+    'audiowire2',
     src,
     include_directories: inc,
     dependencies: deps,
@@ -30,14 +30,7 @@ audiowire_test = executable(
     include_directories: inc,
     link_with: lib,
 )
-ringbuf_test = executable(
-    'ringbuf-test',
-    'tests/ringbuf_test.c',
-    include_directories: inc,
-    link_with: lib,
-)
 
-install_headers('include/audiowire.h')
+install_headers('include/audiowire2.h')
 
-test('ringbuf test', ringbuf_test)
 test('audiowire test', audiowire_test)

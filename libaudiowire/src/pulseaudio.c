@@ -73,8 +73,8 @@ static void on_stream_read(pa_stream *s, size_t length, void *userdata) {
             goto error;
         if (length <= 0)
             continue;
-        if (data && ringbuf_available(base->ringbuf) >= length)
-            ringbuf_push(base->ringbuf, data, length);
+        if (data)
+            base->read_cb((const char *)data, length, base->userdata);
         if (pa_stream_drop(s))
             goto error;
     }
@@ -92,15 +92,9 @@ static void on_stream_write(pa_stream *s, size_t length, void *userdata) {
     size_t nbytes = length;
     if (pa_stream_begin_write(s, &data, &nbytes) || !data)
         goto error;
-
-    if (ringbuf_remaining(base->ringbuf) >= nbytes)
-        ringbuf_pop_back_from(base->ringbuf, data, nbytes, base->max_bufsize);
-    else
-        memset(data, 0, nbytes);
-
+    base->write_cb((char *)data, nbytes, base->userdata);
     if (pa_stream_write(s, data, nbytes, NULL, 0, PA_SEEK_RELATIVE))
         goto error;
-
     return;
 
 error:
@@ -127,17 +121,22 @@ static void free_stream(aw_stream_t *stream) {
     free(stream);
 }
 
-static aw_result_t start_stream(aw_stream_t **s,
-                                const char *devname,
-                                const char *name,
-                                aw_config_t cfg,
-                                bool is_input,
-                                aw_error_callback_t error_cb,
-                                void *userdata) {
+inline aw_result_t aw_initialize() {
+    return AW_RESULT_NO_ERROR;
+}
+
+aw_result_t aw_start(aw_stream_t **s,
+                     const char *devname,
+                     const char *name,
+                     aw_config_t cfg,
+                     aw_read_callback_t read_cb,
+                     aw_write_callback_t write_cb,
+                     aw_error_callback_t error_cb,
+                     void *userdata) {
     aw_result_t result = AW_RESULT_NO_ERROR;
     aw_stream_t *stream = calloc(1, sizeof(aw_stream_t));
     aw_stream_base_t *base = &stream->base;
-    aw_stream_base_init(base, cfg, devname, error_cb, userdata);
+    aw_stream_base_init(base, cfg, devname, read_cb, write_cb, error_cb, userdata);
 
     pa_sample_spec *ss = &stream->sample_spec;
     ss->channels = cfg.channels;
@@ -187,15 +186,22 @@ static aw_result_t start_stream(aw_stream_t **s,
     stream->handle = pa_stream_new(stream->context, name, ss, NULL);
     pa_stream_set_state_callback(stream->handle, on_stream_state, stream);
     pa_stream_set_moved_callback(stream->handle, on_stream_moved, stream);
-    if (is_input)
+    if (read_cb)
         pa_stream_set_read_callback(stream->handle, on_stream_read, stream);
-    else
+    if (write_cb)
         pa_stream_set_write_callback(stream->handle, on_stream_write, stream);
 
-    int res = is_input ? pa_stream_connect_record(stream->handle, devname, ba, STREAM_FLAGS)
-                       : pa_stream_connect_playback(stream->handle, devname, ba, STREAM_FLAGS, NULL, NULL);
-    if (res)
-        goto unlock_error;
+    if (read_cb) {
+        int res = pa_stream_connect_record(stream->handle, devname, ba, STREAM_FLAGS);
+        if (res)
+            goto unlock_error;
+    }
+
+    if (write_cb) {
+        int res = pa_stream_connect_playback(stream->handle, devname, ba, STREAM_FLAGS, NULL, NULL);
+        if (res)
+            goto unlock_error;
+    }
 
     {
         pa_stream_state_t state = pa_stream_get_state(stream->handle);
@@ -222,28 +228,6 @@ error:
 cleanup:
     free_stream(stream);
     return result;
-}
-
-inline aw_result_t aw_initialize() {
-    return AW_RESULT_NO_ERROR;
-}
-
-inline aw_result_t aw_start_record(aw_stream_t **stream,
-                                   const char *devname,
-                                   const char *name,
-                                   aw_config_t cfg,
-                                   aw_error_callback_t error_cb,
-                                   void *userdata) {
-    return start_stream(stream, devname, name, cfg, true, error_cb, userdata);
-}
-
-inline aw_result_t aw_start_playback(aw_stream_t **stream,
-                                     const char *devname,
-                                     const char *name,
-                                     aw_config_t cfg,
-                                     aw_error_callback_t error_cb,
-                                     void *userdata) {
-    return start_stream(stream, devname, name, cfg, false, error_cb, userdata);
 }
 
 aw_result_t aw_stop(aw_stream_t *stream) {

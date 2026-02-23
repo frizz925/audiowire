@@ -1,6 +1,6 @@
 [package]
 name = "audiowire"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 
 [dependencies]
@@ -11,10 +11,11 @@ audiowire_serde = { workspace = true }
 bytes = { workspace = true }
 chrono = "0.4"
 clap = "4.5"
-env_logger = { version = "0.11", features = ["kv"] }
-log = { workspace = true, features = ["kv", "kv_std", "serde"] }
 opus = "0.3"
 tokio = { workspace = true, features = ["rt-multi-thread", "net", "io-util", "time", "sync", "signal", "macros"] }
+slog = { version = "2.8.2", features = ["anyhow"] }
+slog-async = "2.8.0"
+slog-term = "2.9.2"
 
 [[bin]]
 name = "audiowire-udp-server"

@@ -5,14 +5,6 @@ use audiowire_sys::{
     aw_sample_size,
 };
 
-pub const DEFAULT_CONFIG: Config = Config {
-    channels: 2,
-    sample_rate: 48000,
-    sample_format: SampleFormat::S16,
-    buffer_frames: 960,
-    max_buffer_frames: 14400,
-};
-
 #[derive(Clone, Copy)]
 pub enum SampleFormat {
     S16 = aw_sample_format_AW_SAMPLE_FORMAT_S16 as isize,
@@ -64,6 +56,18 @@ impl Config {
     fn frame_count_to_duration(&self, count: usize) -> Duration {
         let ms = count * 1000 / (self.sample_rate as usize);
         Duration::from_millis(ms as u64)
+    }
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            channels: 2,
+            sample_rate: 48000,
+            sample_format: SampleFormat::S16,
+            buffer_frames: 960,
+            max_buffer_frames: 14400,
+        }
     }
 }
 

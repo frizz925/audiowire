@@ -4,9 +4,8 @@ use audiowire_derive::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize)]
 pub struct NetworkTime {
-    pub origin_timestamp: u64,
-    pub receive_timestamp: u64,
-    pub transmit_timestamp: u64,
+    pub rec_timestamp: u64,
+    pub xmt_timestamp: u64,
 }
 
 pub fn get_current_timestamp() -> u64 {

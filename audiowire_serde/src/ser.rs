@@ -1,4 +1,4 @@
-use bytes::BufMut;
+use bytes::{Buf, BufMut, Bytes};
 
 pub trait Serialize {
     fn serialize(&self, buf: &mut impl BufMut);
@@ -38,10 +38,16 @@ impl Serialize for usize {
     }
 }
 
+impl Serialize for Bytes {
+    fn serialize(&self, buf: &mut impl BufMut) {
+        self.remaining().serialize(buf);
+        buf.put_slice(self);
+    }
+}
+
 impl Serialize for &[u8] {
     fn serialize(&self, buf: &mut impl BufMut) {
-        let slice = *self;
-        slice.len().serialize(buf);
-        buf.put_slice(slice);
+        self.len().serialize(buf);
+        buf.put_slice(*self);
     }
 }

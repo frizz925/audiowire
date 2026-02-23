@@ -9,6 +9,7 @@ mod tests {
     use std::{
         ffi::{CStr, CString, c_char, c_int, c_void},
         ptr,
+        sync::atomic::{AtomicUsize, Ordering},
         thread::sleep,
         time::Duration,
     };
@@ -19,6 +20,18 @@ mod tests {
         if res.code != 0 {
             let message = unsafe { CStr::from_ptr(res.message).to_string_lossy() };
             panic!("Result is error: code={}, message={}", res.code, message)
+        }
+    }
+
+    unsafe extern "C" fn on_read(_: *const c_char, len: usize, userdata: *mut c_void) {
+        if let Some(total_bytes) = unsafe { (userdata as *const AtomicUsize).as_ref() } {
+            total_bytes.fetch_add(len, Ordering::Relaxed);
+        }
+    }
+
+    unsafe extern "C" fn on_write(_: *mut c_char, len: usize, userdata: *mut c_void) {
+        if let Some(total_bytes) = unsafe { (userdata as *const AtomicUsize).as_ref() } {
+            total_bytes.fetch_add(len, Ordering::Relaxed);
         }
     }
 
@@ -44,22 +57,29 @@ mod tests {
             let record_name = CString::new("record-test").unwrap();
             let playback_name = CString::new("playback-test").unwrap();
 
+            let total_read = Box::into_raw(Box::new(AtomicUsize::new(0)));
+            let total_write = Box::into_raw(Box::new(AtomicUsize::new(0)));
+
             assert_aw_result(aw_initialize());
-            assert_aw_result(aw_start_record(
+            assert_aw_result(aw_start(
                 &mut record,
                 ptr::null(),
                 record_name.as_ptr(),
                 config,
+                Some(on_read),
+                None,
                 Some(on_error),
-                ptr::null_mut(),
+                total_read as *mut c_void,
             ));
-            assert_aw_result(aw_start_playback(
+            assert_aw_result(aw_start(
                 &mut playback,
                 ptr::null(),
                 playback_name.as_ptr(),
                 config,
+                None,
+                Some(on_write),
                 Some(on_error),
-                ptr::null_mut(),
+                total_write as *mut c_void,
             ));
 
             assert!(!aw_device_name(record).is_null());
@@ -68,21 +88,27 @@ mod tests {
             assert!(!aw_device_name(playback).is_null());
             assert!(aw_sample_rate(playback) > 0);
 
-            let mut buf_arr = [0u8; 65536];
-            let bufsize = buf_arr.len();
-            let buf = buf_arr.as_mut_ptr() as *mut c_char;
-
             loop {
                 sleep(Duration::from_millis(20));
-                let read = aw_record_read(record, buf, bufsize);
-                if read > 0 {
-                    assert_eq!(aw_playback_write(playback, buf, read), read);
+                let read = total_read
+                    .as_ref()
+                    .map(|v| v.load(Ordering::Relaxed))
+                    .unwrap_or_default();
+                let write = total_write
+                    .as_ref()
+                    .map(|v| v.load(Ordering::Relaxed))
+                    .unwrap_or_default();
+                if read > 0 && write > 0 {
                     break;
                 }
             }
 
             assert_aw_result(aw_stop(playback));
             assert_aw_result(aw_stop(record));
+
+            ptr::drop_in_place(total_read);
+            ptr::drop_in_place(total_write);
+
             assert_aw_result(aw_terminate());
         }
     }

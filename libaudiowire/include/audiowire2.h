@@ -29,26 +29,19 @@ typedef struct aw_config {
     uint32_t max_buffer_frames;
 } aw_config_t;
 
+typedef void (*aw_read_callback_t)(const char *buf, size_t len, void *userdata);
+typedef void (*aw_write_callback_t)(char *buf, size_t len, void *userdata);
 typedef void (*aw_error_callback_t)(int err, const char *msg, void *userdata);
 
 aw_result_t aw_initialize();
-aw_result_t aw_start_record(aw_stream_t **stream,
-                            const char *devname,
-                            const char *name,
-                            aw_config_t cfg,
-                            aw_error_callback_t error_cb,
-                            void *userdata);
-aw_result_t aw_start_playback(aw_stream_t **stream,
-                              const char *devname,
-                              const char *name,
-                              aw_config_t cfg,
-                              aw_error_callback_t error_cb,
-                              void *userdata);
-size_t aw_buffer_capacity(aw_stream_t *stream);
-size_t aw_record_peek(aw_stream_t *stream);
-size_t aw_record_read(aw_stream_t *stream, char *buf, size_t bufsize);
-size_t aw_playback_peek(aw_stream_t *stream);
-size_t aw_playback_write(aw_stream_t *stream, const char *buf, size_t bufsize);
+aw_result_t aw_start(aw_stream_t **stream,
+                     const char *devname,
+                     const char *name,
+                     aw_config_t cfg,
+                     aw_read_callback_t read_cb,
+                     aw_write_callback_t write_cb,
+                     aw_error_callback_t error_cb,
+                     void *userdata);
 const char *aw_device_name(aw_stream_t *stream);
 uint32_t aw_sample_rate(aw_stream_t *stream);
 aw_result_t aw_stop(aw_stream_t *stream);

@@ -1,11 +1,11 @@
 pub mod config;
-pub mod errors;
+pub mod error;
 pub mod result;
 pub mod stream;
 
 use audiowire_sys::{aw_initialize, aw_terminate};
 
-use result::{parse_result, Result};
+use result::{Result, parse_result};
 
 #[inline]
 pub fn initialize() -> Result<()> {

@@ -1,11 +1,13 @@
 use proc_macro2::TokenStream;
 use quote::quote;
-use syn::{DeriveInput, Error, Field, Fields, Ident, Result};
+use syn::{DeriveInput, Error, Field, Fields, Generics, Ident, Result};
 
 pub fn expand_derive_deserialize(input: DeriveInput) -> Result<TokenStream> {
-    let name = &input.ident;
+    let DeriveInput {
+        ident, generics, ..
+    } = &input;
 
-    let buf = Ident::new("buf", name.span());
+    let buf = Ident::new("buf", ident.span());
     let body = match input.data {
         syn::Data::Struct(ref data) => {
             let named = matches!(data.fields, Fields::Named(_));
@@ -14,18 +16,25 @@ pub fn expand_derive_deserialize(input: DeriveInput) -> Result<TokenStream> {
         syn::Data::Union(ref data) => deserialize_fields(&buf, data.fields.named.iter(), true),
         syn::Data::Enum(_) => {
             return Err(Error::new(
-                name.span(),
-                "Derive `Deserialize` for Enum is not supported yet",
+                ident.span(),
+                "Derive `Deserialize` for Enum is not supported",
             ));
         }
     };
 
-    Ok(deserialize_impl(name, buf, body))
+    Ok(deserialize_impl(ident, generics, buf, body))
 }
 
-fn deserialize_impl<'a>(name: &Ident, buf: Ident, body: TokenStream) -> TokenStream {
+fn deserialize_impl<'a>(
+    ident: &Ident,
+    generics: &Generics,
+    buf: Ident,
+    body: TokenStream,
+) -> TokenStream {
+    let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
     quote! {
-        impl audiowire_serde::Deserialize for #name {
+        #[automatically_derived]
+        impl #impl_generics audiowire_serde::Deserialize for #ident #ty_generics #where_clause {
             fn deserialize(#buf: &mut impl bytes::Buf) -> Result<Self, bytes::TryGetError> {
                 Ok(#body)
             }
