@@ -1,5 +1,4 @@
 use bytes::Bytes;
-use tokio::sync::mpsc::error::SendError;
 
 use crate::packet::time::NetworkTime;
 
@@ -28,10 +27,9 @@ impl Peer {
         }
     }
 
-    pub async fn write(&self, buf: Bytes) -> Result<(), SendError<Bytes>> {
+    pub fn write(&self, mut buf: Bytes) {
         if let Some(playback) = self.playback.as_ref() {
-            playback.write(buf).await?;
+            playback.write(&mut buf);
         }
-        Ok(())
     }
 }

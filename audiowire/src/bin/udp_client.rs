@@ -9,9 +9,11 @@ use audiowire::{
     command::{DeviceConfig, add_device_args},
     logging,
     packet::{
+        Pack,
+        command::{Command as CommandPacket, CommandClose},
         data::{ClientData, ServerData},
-        handshake::{HandshakeAck, HandshakeInit, HandshakeReply},
-        message::{DecodedMessage, Pack},
+        handshake::{Handshake, HandshakeAck, HandshakeInit, HandshakeReply},
+        message::DecodedMessage,
         stream::StreamFlags,
         time::{NetworkTime, get_current_timestamp},
     },
@@ -20,32 +22,31 @@ use audiowire::{
 use audiowire_serde::Deserialize;
 use bytes::{Buf, Bytes, BytesMut};
 use clap::{Arg, Command};
-use slog::{Logger, debug, error, info, o, warn};
+use slog::{Logger, debug, error, info, o};
 use tokio::{net::UdpSocket, sync::mpsc};
 
 struct Client {
     inner: Peer,
-    log: Logger,
+    running: bool,
 }
 
 impl Client {
-    async fn handle_packet(&self, mut buf: Bytes) -> Result<()> {
+    async fn handle_packet(&mut self, mut buf: Bytes) -> Result<()> {
         match DecodedMessage::deserialize(&mut buf)? {
             DecodedMessage::Data(mut buf) => {
                 let data = ServerData::deserialize(&mut buf)?;
-                self.handle_data(data).await?;
+                self.handle_data(data);
             }
-            DecodedMessage::Unknown(code) => {
-                warn!(self.log, "Got unknown message code: {}", code);
+            DecodedMessage::Command(CommandPacket::Close(CommandClose(_))) => {
+                self.running = false;
             }
             _ => (),
         }
         Ok(())
     }
 
-    async fn handle_data(&self, data: ServerData<Bytes>) -> Result<()> {
-        self.inner.write(data.0).await?;
-        Ok(())
+    fn handle_data(&self, data: ServerData<Bytes>) {
+        self.inner.write(data.0);
     }
 }
 
@@ -117,7 +118,7 @@ async fn run(
         stream_id,
         flags,
         time,
-    } = if let DecodedMessage::HandshakeReply(reply) = message {
+    } = if let DecodedMessage::Handshake(Handshake::Reply(reply)) = message {
         reply
     } else {
         error!(log, "We should get handshake reply here");
@@ -166,11 +167,10 @@ async fn run(
     } else {
         None
     };
-    debug!(log, "Bruh");
 
-    let client = Client {
+    let mut client = Client {
         inner: Peer::new(record, playback, &time, org_timestamp, rec_timestamp),
-        log,
+        running: true,
     };
 
     let (tx, mut cancel_rx) = mpsc::channel(1);
@@ -179,7 +179,7 @@ async fn run(
         tx.send(()).await.unwrap();
     });
 
-    loop {
+    while client.running {
         let mut buf = BytesMut::with_capacity(65536);
         tokio::select! {
             result = sock.recv_buf(&mut buf) => {
@@ -191,6 +191,8 @@ async fn run(
             }
         }
     }
+    sock.send_to(CommandClose(stream_id).pack().as_ref(), &addr)
+        .await?;
 
     Ok(ExitCode::SUCCESS)
 }

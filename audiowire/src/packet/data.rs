@@ -1,10 +1,7 @@
 use audiowire_derive::{Deserialize, Serialize};
 use audiowire_serde::{Deserialize, Serialize};
 
-use super::{
-    message::{EncodedMessage, IntoMessage},
-    stream::StreamId,
-};
+use super::{message::EncodedMessage, stream::StreamId};
 
 #[derive(Serialize, Deserialize)]
 pub struct ClientData<T: Serialize + Deserialize>(pub StreamId, pub T);
@@ -17,9 +14,9 @@ macro_rules! data_messages {
         $($type:ty),+
     ) => {
         $(
-            impl<T: Serialize + Deserialize> IntoMessage for $type {
-                fn into_message(self) -> EncodedMessage<Self> {
-                    EncodedMessage::from(self)
+            impl<T: Serialize + Deserialize> crate::packet::Pack for $type {
+                fn pack(self) -> bytes::Bytes {
+                    EncodedMessage::from(self).pack()
                 }
             }
 

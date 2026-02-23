@@ -9,9 +9,11 @@ use audiowire::{
     command::{DeviceConfig, add_device_args},
     logging,
     packet::{
+        Pack,
+        command::{Command as CommandPacket, CommandClose},
         data::ClientData,
-        handshake::{HandshakeAck, HandshakeInit, HandshakeReply},
-        message::{DecodedMessage, Pack},
+        handshake::{Handshake, HandshakeAck, HandshakeInit, HandshakeReply},
+        message::DecodedMessage,
         stream::{AtomicStreamId, StreamFlags, StreamId},
         time::{NetworkTime, get_current_timestamp},
     },
@@ -20,7 +22,7 @@ use audiowire::{
 use audiowire_serde::Deserialize;
 use bytes::{Buf, Bytes, BytesMut};
 use clap::{Arg, Command, value_parser};
-use slog::{Logger, debug, error, info, o, warn};
+use slog::{Logger, error, info, o, warn};
 use tokio::{
     net::UdpSocket,
     sync::{
@@ -57,20 +59,61 @@ impl Server {
     async fn handle_packet<'a>(&self, context: Context<'a>, mut buf: impl Buf) -> Result<()> {
         let message = DecodedMessage::deserialize(&mut buf)?;
         match message {
-            DecodedMessage::HandshakeInit(init) => {
-                self.handle_handshake_init(context, init).await?;
+            DecodedMessage::Handshake(hs) => {
+                self.handle_handshake(context, hs).await?;
             }
-            DecodedMessage::HandshakeAck(ack) => {
-                self.handle_handshake_ack(context, ack).await?;
+            DecodedMessage::Command(cmd) => {
+                self.handle_command(context, cmd).await?;
             }
             DecodedMessage::Data(mut buf) => {
                 let data = ClientData::deserialize(&mut buf)?;
                 self.handle_data(context, data).await?;
             }
-            DecodedMessage::Unknown(code) => {
-                warn!(context.log, "Got unknown message code: {}", code);
+            _ => (),
+        }
+        Ok(())
+    }
+
+    async fn handle_handshake<'a>(&self, context: Context<'a>, hs: Handshake) -> Result<()> {
+        match hs {
+            Handshake::Init(init) => {
+                self.handle_handshake_init(context, init).await?;
+            }
+            Handshake::Ack(ack) => {
+                self.handle_handshake_ack(context, ack).await?;
             }
             _ => (),
+        }
+        Ok(())
+    }
+
+    async fn handle_command<'a>(&self, context: Context<'a>, cmd: CommandPacket) -> Result<()> {
+        let Context { log, .. } = context;
+        match cmd {
+            CommandPacket::Close(CommandClose(stream_id)) => {
+                self.clients.write().await.remove(&stream_id);
+                info!(log, "Client closed"; "stream_id" => stream_id);
+            }
+            _ => (),
+        }
+        Ok(())
+    }
+
+    async fn handle_data<'a>(
+        &self,
+        context: Context<'a>,
+        data: ClientData<Bytes>,
+    ) -> Result<(), SendError<Bytes>> {
+        let Context { log, .. } = context;
+        let ClientData(stream_id, buf) = data;
+        let log = log.new(o!("stream_id" => stream_id));
+
+        if let Some(client) = self.clients.read().await.get(&stream_id) {
+            if let Client::Running(c) = client {
+                c.inner.write(buf);
+            } else {
+                warn!(log, "Received data packet for client that is not running");
+            }
         }
         Ok(())
     }
@@ -79,7 +122,7 @@ impl Server {
         &self,
         context: Context<'a>,
         init: HandshakeInit,
-    ) -> std::io::Result<()> {
+    ) -> Result<()> {
         let DeviceConfig {
             source_enabled,
             sink_enabled,
@@ -139,10 +182,7 @@ impl Server {
             "xmt_timestamp" => time.xmt_timestamp
         );
 
-        let client = {
-            let mut clients = self.clients.write().await;
-            clients.remove(&stream_id)
-        };
+        let client = self.clients.write().await.remove(&stream_id);
         let hs = if let Some(client) = client {
             match client {
                 Client::Handshake(hs) => hs,
@@ -186,36 +226,12 @@ impl Server {
             None
         };
 
-        let client = Client::Running(ClientRunning::new(
-            record,
-            playback,
-            &time,
-            org_timestamp,
-            rec_timestamp,
-        ));
-        let mut clients = self.clients.write().await;
-        clients.insert(stream_id, client);
-        debug!(log, "Client inserted");
+        let client = Client::Running(ClientRunning {
+            inner: Peer::new(record, playback, &time, org_timestamp, rec_timestamp),
+            addr: addr.to_owned(),
+        });
+        self.clients.write().await.insert(stream_id, client);
 
-        Ok(())
-    }
-
-    async fn handle_data<'a>(
-        &self,
-        context: Context<'a>,
-        data: ClientData<Bytes>,
-    ) -> Result<(), SendError<Bytes>> {
-        let Context { log, .. } = context;
-        let ClientData(stream_id, buf) = data;
-        let log = log.new(o!("stream_id" => stream_id));
-
-        if let Some(client) = self.clients.read().await.get(&stream_id) {
-            if let Client::Running(c) = client {
-                c.write(buf).await?;
-            } else {
-                warn!(log, "Received data packet for client that is not running");
-            }
-        }
         Ok(())
     }
 }
@@ -230,7 +246,10 @@ struct ClientHandshake {
     org_timestamp: u64,
 }
 
-type ClientRunning = Peer;
+struct ClientRunning {
+    inner: Peer,
+    addr: SocketAddr,
+}
 
 fn cmd() -> Command {
     let cmd = Command::new("audiowire-udp-server")
@@ -281,12 +300,11 @@ async fn run(log: Logger, config: DeviceConfig, addr: SocketAddr) -> Result<()> 
         tx.send(()).await.unwrap();
     });
 
-    debug!(log, "Bruh");
-    let listener = &server.sock;
+    let sock = &server.sock;
     loop {
         let mut buf = BytesMut::with_capacity(65536);
         let (_, addr) = tokio::select! {
-            result = listener.recv_buf_from(&mut buf) => {
+            result = sock.recv_buf_from(&mut buf) => {
                 result?
             }
             _ = rx.recv() => {
@@ -307,6 +325,13 @@ async fn run(log: Logger, config: DeviceConfig, addr: SocketAddr) -> Result<()> 
                 error!(log, "Failed to handle packet"; "error" => e.to_string());
             }
         });
+    }
+
+    for (stream_id, client) in server.clients.read().await.iter() {
+        if let Client::Running(ClientRunning { addr, .. }) = client {
+            sock.send_to(CommandClose(*stream_id).pack().as_ref(), addr)
+                .await?;
+        }
     }
     info!(log, "Server stopped listening");
 

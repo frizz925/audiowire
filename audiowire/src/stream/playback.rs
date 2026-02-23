@@ -1,23 +1,34 @@
-use std::collections::VecDeque;
+use std::sync::Arc;
 
 use anyhow::Result;
-use bytes::Bytes;
-use slog::{Logger, info};
-use tokio::sync::mpsc;
+use bytes::Buf;
+use slog::{Logger, debug, info};
 
 use crate::{
     backend::stream::{Stream, StreamBuilder},
+    ringbuf::RingBuf,
     stream::error::create_error_cb,
 };
 
 pub struct PlaybackStream {
     pub inner: Stream,
-    tx: mpsc::Sender<Bytes>,
+    log: Logger,
+    rb: Arc<RingBuf>,
 }
 
 impl PlaybackStream {
-    pub async fn write(&self, buf: Bytes) -> Result<(), mpsc::error::SendError<Bytes>> {
-        self.tx.send(buf).await
+    pub fn write(&self, buf: &mut impl Buf) {
+        debug!(self.log, "Received data {} bytes", buf.remaining());
+        let Self { rb, .. } = self;
+        while buf.remaining() > 0 && rb.available() > 0 {
+            let src = buf.chunk();
+            let dst = rb.write_chunk();
+            let write = usize::min(src.len(), dst.len());
+            dst[..write].copy_from_slice(&src[..write]);
+
+            buf.advance(write);
+            rb.advance_write(write);
+        }
     }
 }
 
@@ -26,18 +37,17 @@ where
     N: Into<Vec<u8>>,
     D: Into<Vec<u8>>,
 {
-    let mut buf = VecDeque::<u8>::with_capacity(65536);
-    let (tx, mut rx) = mpsc::channel::<Bytes>(5);
+    let rb = Arc::new(RingBuf::new(65536));
+    let stream_rb = Arc::clone(&rb);
     let stream = StreamBuilder::default()
         .write_cb(move |dst| {
-            if let Ok(src) = rx.try_recv() {
-                buf.extend(src.into_iter());
-            }
-            let requested = dst.len();
-            if buf.len() >= requested {
-                let slice = buf.make_contiguous();
-                dst.copy_from_slice(&slice[..requested]);
-                // TODO: Remove the head from VecDeque
+            let rb = &stream_rb;
+            let src = rb.read_chunk();
+            let read = usize::min(src.len(), dst.len());
+
+            if read >= dst.len() {
+                dst[..read].copy_from_slice(&src[..read]);
+                rb.advance_read(read);
             } else {
                 dst.fill(0);
             }
@@ -49,5 +59,9 @@ where
         "Using playback device: {}",
         stream.device_name().unwrap_or("unknown")
     );
-    Ok(PlaybackStream { inner: stream, tx })
+    Ok(PlaybackStream {
+        inner: stream,
+        log: log.to_owned(),
+        rb,
+    })
 }

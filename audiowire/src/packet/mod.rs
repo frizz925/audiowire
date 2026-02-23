@@ -1,5 +1,12 @@
+use bytes::Bytes;
+
+pub mod command;
 pub mod data;
 pub mod handshake;
 pub mod message;
 pub mod stream;
 pub mod time;
+
+pub trait Pack {
+    fn pack(self) -> Bytes;
+}

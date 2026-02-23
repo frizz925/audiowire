@@ -1,5 +1,7 @@
 use audiowire_derive::{Deserialize, Serialize};
 
+use crate::message_enum;
+
 use super::{
     stream::{StreamFlags, StreamId},
     time::NetworkTime,
@@ -24,4 +26,11 @@ pub struct HandshakeReply {
 pub struct HandshakeAck {
     pub stream_id: StreamId,
     pub time: NetworkTime,
+}
+
+message_enum! {
+    Handshake;
+    (1, Init, HandshakeInit),
+    (2, Reply, HandshakeReply),
+    (3, Ack, HandshakeAck),
 }

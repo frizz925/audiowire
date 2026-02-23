@@ -47,8 +47,10 @@ fn deserialize_fields<'a>(
     fields: impl Iterator<Item = &'a Field>,
     named: bool,
 ) -> TokenStream {
-    let exprs = fields.map(|f| deserialize_buf(buf, f));
-    if named {
+    let exprs: Vec<_> = fields.map(|f| deserialize_buf(buf, f)).collect();
+    if exprs.is_empty() {
+        quote!(Self)
+    } else if named {
         quote! {
             Self {
                 #(

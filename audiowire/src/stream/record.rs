@@ -1,7 +1,7 @@
 use std::{net::SocketAddr, sync::Arc};
 
 use bytes::Bytes;
-use slog::{Logger, error, info};
+use slog::{Logger, debug, error, info};
 use tokio::{
     net::UdpSocket,
     sync::{Notify, mpsc},
@@ -15,6 +15,10 @@ use crate::{
     },
     stream::error::create_error_cb,
 };
+
+pub trait SerializeFn: Fn(Bytes) -> Bytes {}
+
+impl<F: Fn(Bytes) -> Bytes> SerializeFn for F {}
 
 pub struct RecordStream {
     pub inner: Stream,
@@ -31,6 +35,7 @@ impl Drop for RecordStream {
 }
 
 struct RecordWorker {
+    log: Logger,
     notify: Arc<Notify>,
     sock: Arc<UdpSocket>,
     addr: SocketAddr,
@@ -38,16 +43,16 @@ struct RecordWorker {
 }
 
 impl RecordWorker {
-    async fn start(&mut self, serialize: impl Fn(Bytes) -> Bytes) -> std::io::Result<()> {
+    async fn start(&mut self, serialize: impl SerializeFn) -> std::io::Result<()> {
         while self.run(&serialize).await? {}
         Ok(())
     }
 
-    async fn run(&mut self, serialize: impl Fn(Bytes) -> Bytes) -> std::io::Result<bool> {
+    async fn run(&mut self, serialize: impl SerializeFn) -> std::io::Result<bool> {
         tokio::select! {
             opt = self.rx.recv() => {
                 if let Some(buf) = opt {
-                    self.sock.send_to(serialize(buf).as_ref(), &self.addr).await?;
+                    self.send_stream(serialize, buf).await?;
                     Ok(true)
                 } else {
                     Ok(false)
@@ -58,6 +63,19 @@ impl RecordWorker {
             }
         }
     }
+
+    async fn send_stream(
+        &mut self,
+        serialize: impl SerializeFn,
+        buf: Bytes,
+    ) -> std::io::Result<()> {
+        let send = self
+            .sock
+            .send_to(serialize(buf).as_ref(), &self.addr)
+            .await?;
+        debug!(self.log, "Sent data {} bytes", send);
+        Ok(())
+    }
 }
 
 pub fn handle_record<N, D>(
@@ -66,13 +84,13 @@ pub fn handle_record<N, D>(
     device: Option<D>,
     sock: Arc<UdpSocket>,
     addr: SocketAddr,
-    serialize: impl Fn(Bytes) -> Bytes + Send + Sync + 'static,
+    serialize: impl SerializeFn + Send + Sync + 'static,
 ) -> Result<RecordStream>
 where
     N: Into<Vec<u8>>,
     D: Into<Vec<u8>>,
 {
-    let (tx, rx) = mpsc::channel::<Bytes>(5);
+    let (tx, rx) = mpsc::channel::<Bytes>(512);
     let stream = StreamBuilder::default()
         .read_cb(move |buf: &[u8]| {
             tx.blocking_send(Bytes::copy_from_slice(buf)).ok();
@@ -87,15 +105,15 @@ where
 
     let notify = Arc::new(Notify::new());
     let mut worker = RecordWorker {
+        log: log.to_owned(),
         notify: Arc::clone(&notify),
         sock,
         addr,
         rx,
     };
-    let log = log.clone();
     let handle = tokio::spawn(async move {
         if let Err(e) = worker.start(serialize).await {
-            error!(log, "Worker error"; "error" => e);
+            error!(worker.log, "Worker error"; "error" => e);
         }
     });
 

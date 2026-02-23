@@ -1,15 +1,7 @@
 use audiowire_serde::{Deserialize, Serialize};
 use bytes::{Buf, BufMut, Bytes, BytesMut, TryGetError};
 
-use super::handshake;
-
-pub trait IntoMessage: Sized {
-    fn into_message(self) -> EncodedMessage<Self>;
-}
-
-pub trait Pack {
-    fn pack(self) -> Bytes;
-}
+use super::{Pack, command, handshake};
 
 pub struct EncodedMessage<T> {
     pub code: u8,
@@ -31,12 +23,6 @@ impl<T: Serialize> Pack for EncodedMessage<T> {
     }
 }
 
-impl<T: Serialize + IntoMessage> Pack for T {
-    fn pack(self) -> Bytes {
-        self.into_message().pack()
-    }
-}
-
 /*
 impl Deserialize for DecodedMessage {
     fn deserialize(buf: &mut impl Buf) -> Result<Self, TryGetError> {
@@ -52,7 +38,7 @@ impl Deserialize for DecodedMessage {
 macro_rules! message_types {
     (
         $(
-            ($code:expr, $name:ident, $type:ty),
+            ($code:literal, $name:ident, $type:ty),
         )+
     ) => {
         #[non_exhaustive]
@@ -90,9 +76,9 @@ macro_rules! message_types {
         }
 
         $(
-            impl IntoMessage for $type {
-                fn into_message(self) -> EncodedMessage<Self> {
-                    EncodedMessage::from(self)
+            impl Pack for $type {
+                fn pack(self) -> Bytes {
+                    EncodedMessage::from(self).pack()
                 }
             }
 
@@ -106,7 +92,6 @@ macro_rules! message_types {
 }
 
 message_types! {
-    (1, HandshakeInit, handshake::HandshakeInit),
-    (2, HandshakeReply, handshake::HandshakeReply),
-    (3, HandshakeAck, handshake::HandshakeAck),
+    (1, Handshake, handshake::Handshake),
+    (2, Command, command::Command),
 }
