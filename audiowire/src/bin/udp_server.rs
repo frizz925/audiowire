@@ -335,7 +335,7 @@ async fn run(log: Logger, config: DeviceConfig, addr: SocketAddr) -> Result<()> 
     for (stream_id, client) in server.clients.read().await.iter() {
         if let Client::Running(ClientRunning { addr, .. }) = client {
             let cmd: CommandPacket = CommandClose(*stream_id).into();
-            sock.send_to(cmd, addr).await?;
+            sock.send_message_to(cmd, addr).await?;
         }
     }
     info!(log, "Server stopped listening");

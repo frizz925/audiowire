@@ -113,9 +113,9 @@ async fn run(
         },
     }
     .into();
-    sock.send_to(init, &saddr).await?;
+    sock.send_message_to(init, &saddr).await?;
 
-    let (message, addr) = sock.recv_from().await?;
+    let (message, addr) = sock.recv_message_from().await?;
     let rec_timestamp = get_current_timestamp();
 
     let HandshakeReply {
@@ -146,7 +146,7 @@ async fn run(
         },
     }
     .into();
-    sock.send_to(ack, &saddr).await?;
+    sock.send_message_to(ack, &saddr).await?;
 
     let sock = Arc::new(sock.into_inner());
     let record = if config.source_enabled && flags.sink_enabled {
@@ -204,7 +204,7 @@ async fn run(
         }
     }
     let cmd: CommandPacket = CommandClose(stream_id).into();
-    sock.send_to(cmd, &addr).await?;
+    sock.send_message_to(cmd, &addr).await?;
 
     Ok(ExitCode::SUCCESS)
 }

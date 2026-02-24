@@ -19,9 +19,9 @@ trait UdpWrapperInner {
 }
 
 pub trait UdpWrapper: Sized {
-    fn recv_from(&mut self) -> impl Future<Output = Result<(IncomingMessage, SocketAddr)>>;
+    fn recv_message_from(&mut self) -> impl Future<Output = Result<(IncomingMessage, SocketAddr)>>;
 
-    fn send_to<T, A>(&mut self, value: T, addr: A) -> impl Future<Output = Result<()>>
+    fn send_message_to<T, A>(&mut self, value: T, addr: A) -> impl Future<Output = Result<()>>
     where
         T: Into<OutgoingMessage<T>> + Serialize,
         A: ToSocketAddrs;
@@ -41,14 +41,14 @@ pub trait UdpWrapper: Sized {
 }
 
 impl<U: UdpWrapperInner + AsRef<UdpSocket>> UdpWrapper for U {
-    async fn recv_from(&mut self) -> Result<(IncomingMessage, SocketAddr)> {
+    async fn recv_message_from(&mut self) -> Result<(IncomingMessage, SocketAddr)> {
         let (mut buf, addr) = self.raw_recv_from().await?;
         let message = IncomingMessage::deserialize(&mut buf)
             .map_err(|e| Error::new(ErrorKind::UnexpectedEof, e))?;
         Ok((message, addr))
     }
 
-    async fn send_to<T, A>(&mut self, value: T, addr: A) -> Result<()>
+    async fn send_message_to<T, A>(&mut self, value: T, addr: A) -> Result<()>
     where
         T: Into<OutgoingMessage<T>> + Serialize,
         A: ToSocketAddrs,
@@ -148,6 +148,14 @@ impl<S: AsRef<UdpSocket>> AsRef<UdpSocket> for BorrowedUdpWrapper<S> {
     }
 }
 
+impl<S: AsRef<UdpSocket>> Deref for BorrowedUdpWrapper<S> {
+    type Target = UdpSocket;
+
+    fn deref(&self) -> &Self::Target {
+        self.as_ref()
+    }
+}
+
 pub struct OwnedUdpWrapper {
     inner: UdpSocket,
     buf: BytesMut,
@@ -177,6 +185,14 @@ impl Into<UdpSocket> for OwnedUdpWrapper {
 
 impl AsRef<UdpSocket> for OwnedUdpWrapper {
     fn as_ref(&self) -> &UdpSocket {
+        &self.inner
+    }
+}
+
+impl Deref for OwnedUdpWrapper {
+    type Target = UdpSocket;
+
+    fn deref(&self) -> &Self::Target {
         &self.inner
     }
 }
