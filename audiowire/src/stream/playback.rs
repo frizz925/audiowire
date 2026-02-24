@@ -5,7 +5,10 @@ use bytes::Buf;
 use slog::{Logger, debug, info, warn};
 
 use crate::{
-    backend::stream::{Stream, StreamBuilder},
+    backend::{
+        config::Config,
+        stream::{Stream, StreamBuilder},
+    },
     ringbuf::RingBuf,
     stream::error::create_error_cb,
 };
@@ -13,7 +16,7 @@ use crate::{
 pub struct PlaybackStream {
     pub inner: Stream,
     log: Logger,
-    rb: Arc<RingBuf>,
+    rb: Arc<RingBuf<u8>>,
 }
 
 impl PlaybackStream {
@@ -23,20 +26,24 @@ impl PlaybackStream {
         while buf.remaining() > 0 && rb.available() > 0 {
             let mut dst = rb.write_chunks();
             buf.advance(dst.write(buf.chunk()));
-            dst.flush();
         }
     }
 }
 
-pub fn handle_playback<N, D>(log: &Logger, name: N, device: Option<D>) -> Result<PlaybackStream>
+pub fn handle_playback<N, D>(
+    log: &Logger,
+    config: Config,
+    name: N,
+    device: Option<D>,
+) -> Result<PlaybackStream>
 where
     N: Into<Vec<u8>>,
     D: Into<Vec<u8>>,
 {
-    let rb = Arc::new(RingBuf::new(65536));
+    let rb = Arc::new(RingBuf::new(config.max_buffer_size()));
     let stream_rb = Arc::clone(&rb);
     let stream_log = log.to_owned();
-    let stream = StreamBuilder::default()
+    let stream = StreamBuilder::new(config)
         .write_cb(move |dst| {
             let (rb, log) = (&stream_rb, &stream_log);
             let mut src = rb.read_chunks();
@@ -47,7 +54,7 @@ where
                 warn!(
                     log, "Buffer underflow!";
                     "requested" => dst.len(),
-                    "available" => src.remaining()
+                    "remaining" => src.remaining()
                 );
                 dst.fill(0);
             }

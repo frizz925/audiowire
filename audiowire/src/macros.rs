@@ -57,12 +57,6 @@ macro_rules! message_enum {
                     Self::$name(value)
                 }
             }
-
-            impl crate::packet::Pack for $struct {
-                fn pack(self) -> bytes::Bytes {
-                    $enum::from(self).pack()
-                }
-            }
         )+
     };
 }

@@ -1,30 +1,33 @@
 use std::{net::SocketAddr, sync::Arc};
 
-use bytes::Bytes;
-use slog::{Logger, debug, error, info};
-use tokio::{
-    net::UdpSocket,
-    sync::{Notify, mpsc},
-    task::JoinHandle,
-};
+use bytes::{BufMut, BytesMut};
+use slog::{Logger, debug, error, info, warn};
+use tokio::{net::UdpSocket, sync::Notify, task::JoinHandle};
 
 use crate::{
     backend::{
+        config::Config,
         result::Result,
         stream::{Stream, StreamBuilder},
     },
+    ringbuf::RingBuf,
     stream::error::create_error_cb,
 };
 
-pub trait SerializeFn: Fn(Bytes) -> Bytes {}
+pub trait SerializeFn<B: BufMut>: Fn(&[u8], &mut B) {}
 
-impl<F: Fn(Bytes) -> Bytes> SerializeFn for F {}
+impl<B: BufMut, F: Fn(&[u8], &mut B)> SerializeFn<B> for F {}
 
 pub struct RecordStream {
     pub inner: Stream,
-
     notify: Arc<Notify>,
     handle: JoinHandle<()>,
+}
+
+impl AsRef<Stream> for RecordStream {
+    fn as_ref(&self) -> &Stream {
+        &self.inner
+    }
 }
 
 impl Drop for RecordStream {
@@ -36,87 +39,104 @@ impl Drop for RecordStream {
 
 struct RecordWorker {
     log: Logger,
-    notify: Arc<Notify>,
+    config: Config,
+
+    rb: RingBuf<u8>,
     sock: Arc<UdpSocket>,
     addr: SocketAddr,
-    rx: mpsc::Receiver<Bytes>,
+
+    data_notify: Notify,
+    cancel_notify: Arc<Notify>,
 }
 
 impl RecordWorker {
-    async fn start(&mut self, serialize: impl SerializeFn) -> std::io::Result<()> {
-        while self.run(&serialize).await? {}
-        Ok(())
+    fn write(&self, src: &[u8]) {
+        let mut dst = self.rb.write_chunks();
+        if dst.available() >= src.len() {
+            dst.write(src);
+            self.data_notify.notify_one();
+        } else {
+            warn!(
+                self.log, "Buffer underflow!";
+                "requested" => src.len(),
+                "available" => dst.available()
+            );
+        }
     }
 
-    async fn run(&mut self, serialize: impl SerializeFn) -> std::io::Result<bool> {
-        tokio::select! {
-            opt = self.rx.recv() => {
-                if let Some(buf) = opt {
-                    self.send_stream(serialize, buf).await?;
-                    Ok(true)
-                } else {
-                    Ok(false)
+    async fn run(&self, serialize: impl SerializeFn<BytesMut>) {
+        let Self { config, rb, .. } = self;
+        let mut buf = BytesMut::with_capacity(65536);
+        let bufsize = config.buffer_size();
+        loop {
+            tokio::select! {
+                _ = self.data_notify.notified() => {}
+                _ = self.cancel_notify.notified() => {
+                    break;
                 }
             }
-            _ = self.notify.notified() => {
-                Ok(false)
+            let mut src = rb.read_chunks();
+            while src.remaining() >= bufsize {
+                buf.put_bytes(0, bufsize);
+                src.read(&mut buf);
+
+                let src = buf.split();
+                serialize(&src, &mut buf);
+                self.send(&buf).await;
+                buf.unsplit(src);
+                buf.clear();
             }
         }
     }
 
-    async fn send_stream(
-        &mut self,
-        serialize: impl SerializeFn,
-        buf: Bytes,
-    ) -> std::io::Result<()> {
-        let sent = self
-            .sock
-            .send_to(serialize(buf).as_ref(), &self.addr)
-            .await?;
-        debug!(self.log, "Sent data {} bytes", sent);
-        Ok(())
+    async fn send(&self, buf: &[u8]) {
+        match self.sock.send_to(buf, self.addr).await {
+            Ok(send) => debug!(self.log, "Sent data {send} bytes"),
+            Err(e) => error!(self.log, "Failed to send packet"; "error" => e),
+        }
     }
 }
 
 pub fn handle_record<N, D>(
     log: &Logger,
+    config: Config,
     name: N,
     device: Option<D>,
     sock: Arc<UdpSocket>,
     addr: SocketAddr,
-    serialize: impl SerializeFn + Send + Sync + 'static,
+    serialize: impl SerializeFn<BytesMut> + Send + Sync + 'static,
 ) -> Result<RecordStream>
 where
     N: Into<Vec<u8>>,
     D: Into<Vec<u8>>,
 {
-    let (tx, rx) = mpsc::channel::<Bytes>(512);
-    let stream = StreamBuilder::default()
-        .read_cb(move |buf: &[u8]| {
-            tx.blocking_send(Bytes::copy_from_slice(buf)).ok();
-        })
-        .error_cb(create_error_cb(log.clone()))
-        .start(name, device)?;
+    let worker = Arc::new(RecordWorker {
+        log: log.clone(),
+        config: config.clone(),
+
+        rb: RingBuf::new(config.max_buffer_size()),
+        sock,
+        addr,
+
+        data_notify: Notify::new(),
+        cancel_notify: Arc::new(Notify::new()),
+    });
+
+    let stream = {
+        let worker = Arc::clone(&worker);
+        StreamBuilder::new(config)
+            .read_cb(move |src| worker.write(src))
+            .error_cb(create_error_cb(log.clone()))
+            .start(name, device)?
+    };
     info!(
         log,
         "Using record device: {}",
         stream.device_name().unwrap_or("unknown")
     );
 
-    let notify = Arc::new(Notify::new());
-    let mut worker = RecordWorker {
-        log: log.to_owned(),
-        notify: Arc::clone(&notify),
-        sock,
-        addr,
-        rx,
-    };
-    let handle = tokio::spawn(async move {
-        if let Err(e) = worker.start(serialize).await {
-            error!(worker.log, "Worker error"; "error" => e);
-        }
-    });
-
+    let notify = Arc::clone(&worker.cancel_notify);
+    let handle = tokio::spawn(async move { worker.run(serialize).await });
     Ok(RecordStream {
         inner: stream,
         notify,

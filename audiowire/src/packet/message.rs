@@ -1,30 +1,30 @@
 use audiowire_serde::{Deserialize, Serialize};
-use bytes::{Buf, BufMut, Bytes, BytesMut, TryGetError};
+use bytes::{BufMut, Bytes, BytesMut};
 
-use super::{Pack, command, handshake};
+use super::{command, handshake};
 
-pub struct EncodedMessage<T> {
+pub struct OutgoingMessage<T> {
     pub code: u8,
     pub message: T,
 }
 
-impl<T: Serialize> Serialize for EncodedMessage<T> {
+impl<T: Serialize> OutgoingMessage<T> {
+    pub fn into_bytes(self) -> Bytes {
+        let mut buf = BytesMut::new();
+        self.serialize(&mut buf);
+        buf.freeze()
+    }
+}
+
+impl<T: Serialize> Serialize for OutgoingMessage<T> {
     fn serialize(&self, buf: &mut impl BufMut) {
         buf.put_u8(self.code);
         self.message.serialize(buf);
     }
 }
 
-impl<T: Serialize> Pack for EncodedMessage<T> {
-    fn pack(self) -> Bytes {
-        let mut buf = BytesMut::with_capacity(2048);
-        self.serialize(&mut buf);
-        buf.freeze()
-    }
-}
-
 /*
-impl Deserialize for DecodedMessage {
+impl Deserialize for IncomingMessage {
     fn deserialize(buf: &mut impl Buf) -> Result<Self, TryGetError> {
         let message = match buf.try_get_u8()? {
             10 => Self::Data(buf.copy_to_bytes(buf.remaining())),
@@ -39,35 +39,35 @@ macro_rules! message_types {
     (
         $(
             $code:literal => ($name:ident, $type:ty),
-        )+
+        )*
     ) => {
         #[non_exhaustive]
-        pub enum DecodedMessage {
+        pub enum IncomingMessage {
             $(
                 $name($type),
-            )+
-            Data(Bytes),
+            )*
+            Data(bytes::Bytes),
             Unknown(u8),
         }
 
-        impl DecodedMessage {
+        impl IncomingMessage {
             pub fn code(&self) -> u8 {
                 match self {
                     $(
                         Self::$name(_) => $code,
-                    )+
+                    )*
                     Self::Data(_) => 10,
                     Self::Unknown(code) => *code,
                 }
             }
         }
 
-        impl Deserialize for DecodedMessage {
-            fn deserialize(buf: &mut impl Buf) -> Result<Self, TryGetError> {
+        impl Deserialize for IncomingMessage {
+            fn deserialize(buf: &mut impl bytes::Buf) -> Result<Self, bytes::TryGetError> {
                 let message = match buf.try_get_u8()? {
                     $(
                         $code => Self::$name(<$type as Deserialize>::deserialize(buf)?),
-                    )+
+                    )*
                     10 => Self::Data(buf.copy_to_bytes(buf.remaining())),
                     code => Self::Unknown(code),
                 };
@@ -76,18 +76,12 @@ macro_rules! message_types {
         }
 
         $(
-            impl Pack for $type {
-                fn pack(self) -> Bytes {
-                    EncodedMessage::from(self).pack()
-                }
-            }
-
-            impl From<$type> for EncodedMessage<$type> {
+            impl From<$type> for OutgoingMessage<$type> {
                 fn from(value: $type) -> Self {
                     Self { code: $code, message: value }
                 }
             }
-        )+
+        )*
     };
 }
 

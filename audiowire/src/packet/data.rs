@@ -1,26 +1,26 @@
 use audiowire_derive::{Deserialize, Serialize};
 use audiowire_serde::{Deserialize, Serialize};
 
-use super::{message::EncodedMessage, stream::StreamId};
+use super::{message::OutgoingMessage, stream::StreamId};
 
-#[derive(Serialize, Deserialize)]
-pub struct ClientData<T: Serialize + Deserialize>(pub StreamId, pub T);
+#[derive(Serialize)]
+pub struct OutgoingClientData<T: Serialize>(pub StreamId, pub T);
 
-#[derive(Serialize, Deserialize)]
-pub struct ServerData<T: Serialize + Deserialize>(pub T);
+#[derive(Deserialize)]
+pub struct IncomingClientData<T: Deserialize>(pub StreamId, pub T);
 
-macro_rules! data_messages {
+#[derive(Serialize)]
+pub struct OutgoingServerData<T: Serialize>(pub T);
+
+#[derive(Deserialize)]
+pub struct IncomingServerData<T: Deserialize>(pub T);
+
+macro_rules! outgoing_data {
     (
         $($type:ty),+
     ) => {
         $(
-            impl<T: Serialize + Deserialize> crate::packet::Pack for $type {
-                fn pack(self) -> bytes::Bytes {
-                    EncodedMessage::from(self).pack()
-                }
-            }
-
-            impl<T: Serialize + Deserialize> From<$type> for EncodedMessage<$type> {
+            impl<T: Serialize> From<$type> for OutgoingMessage<$type> {
                 fn from(value: $type) -> Self {
                     Self {
                         code: 10,
@@ -32,4 +32,4 @@ macro_rules! data_messages {
     };
 }
 
-data_messages!(ClientData<T>, ServerData<T>);
+outgoing_data!(OutgoingClientData<T>, OutgoingServerData<T>);

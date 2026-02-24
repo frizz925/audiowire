@@ -4,31 +4,16 @@ use std::{
 };
 
 #[derive(Debug)]
-pub struct RingBuf {
-    buf: UnsafeCell<Vec<u8>>,
+pub struct RingBuf<T> {
+    buf: UnsafeCell<Vec<T>>,
     ridx: AtomicUsize,
     widx: AtomicUsize,
     mask: usize,
     capacity: usize,
 }
 
-impl RingBuf {
+impl<T> RingBuf<T> {
     const MAX_CAPACITY: usize = (usize::MAX >> 1) + 1;
-
-    pub fn new(requested: usize) -> Self {
-        let mut capacity = 2;
-        while capacity <= requested && capacity < Self::MAX_CAPACITY {
-            capacity <<= 1;
-        }
-
-        Self {
-            buf: UnsafeCell::new(vec![0u8; capacity]),
-            ridx: AtomicUsize::new(0),
-            widx: AtomicUsize::new(0),
-            mask: capacity - 1,
-            capacity,
-        }
-    }
 
     /// How many bytes of data is remaining to read.
     #[inline]
@@ -63,7 +48,7 @@ impl RingBuf {
         self.capacity
     }
 
-    pub fn read_chunks<'a>(&'a self) -> Chunks<'a, u8> {
+    pub fn read_chunks<'a>(&'a self) -> Chunks<'a, T> {
         let (ridx, widx) = (
             self.ridx.load(Ordering::Relaxed),
             self.widx.load(Ordering::Relaxed),
@@ -84,19 +69,19 @@ impl RingBuf {
             .unwrap();
     }
 
-    pub fn write_chunks<'a>(&'a self) -> MutChunks<'a, u8> {
+    pub fn write_chunks<'a>(&'a self) -> ChunksMut<'a, T> {
         let (ridx, widx) = (
             self.ridx.load(Ordering::Relaxed),
             self.widx.load(Ordering::Relaxed),
         );
         let buf = unsafe { &mut *self.buf.get() };
         if widx < ridx {
-            MutChunks::new(self, &mut buf[widx..ridx - 1], &mut [])
+            ChunksMut::new(self, &mut buf[widx..ridx - 1], &mut [])
         } else if ridx <= 0 {
-            MutChunks::new(self, &mut buf[widx..self.mask], &mut [])
+            ChunksMut::new(self, &mut buf[widx..self.mask], &mut [])
         } else {
             let (tail, head) = buf.split_at_mut(widx);
-            MutChunks::new(self, head, &mut tail[..ridx - 1])
+            ChunksMut::new(self, head, &mut tail[..ridx - 1])
         }
     }
 
@@ -141,11 +126,28 @@ impl RingBuf {
     */
 }
 
-unsafe impl Sync for RingBuf {}
-unsafe impl Send for RingBuf {}
+impl<T: Clone + Default> RingBuf<T> {
+    pub fn new(requested: usize) -> Self {
+        let mut capacity = 2;
+        while capacity <= requested && capacity < Self::MAX_CAPACITY {
+            capacity <<= 1;
+        }
+
+        Self {
+            buf: UnsafeCell::new(vec![T::default(); capacity]),
+            ridx: AtomicUsize::new(0),
+            widx: AtomicUsize::new(0),
+            mask: capacity - 1,
+            capacity,
+        }
+    }
+}
+
+unsafe impl<T> Sync for RingBuf<T> {}
+unsafe impl<T> Send for RingBuf<T> {}
 
 pub struct Chunks<'a, T> {
-    rb: &'a RingBuf,
+    rb: &'a RingBuf<T>,
     head: &'a [T],
     tail: &'a [T],
     pos: usize,
@@ -153,7 +155,7 @@ pub struct Chunks<'a, T> {
 }
 
 impl<'a, T> Chunks<'a, T> {
-    pub fn new(rb: &'a RingBuf, head: &'a [T], tail: &'a [T]) -> Self {
+    pub fn new(rb: &'a RingBuf<T>, head: &'a [T], tail: &'a [T]) -> Self {
         Self {
             rb,
             head,
@@ -164,13 +166,23 @@ impl<'a, T> Chunks<'a, T> {
     }
 
     #[inline]
+    pub fn head(&'a self) -> &'a [T] {
+        self.head
+    }
+
+    #[inline]
+    pub fn tail(&'a self) -> &'a [T] {
+        self.tail
+    }
+
+    #[inline]
     pub fn remaining(&self) -> usize {
         self.len - self.pos
     }
 
     #[inline]
     pub fn free(self) {
-        self.rb.advance_read(self.pos);
+        // Consume self and drop
     }
 }
 
@@ -193,8 +205,7 @@ impl<'a, T: Copy> Chunks<'a, T> {
         read
     }
 
-    #[inline]
-    pub fn consume(self) -> Vec<T> {
+    pub fn consume(mut self) -> Vec<T> {
         let mut buf = Vec::with_capacity(self.remaining());
         let pos = if self.pos < self.head.len() {
             buf.extend_from_slice(&self.head[self.pos..]);
@@ -203,21 +214,29 @@ impl<'a, T: Copy> Chunks<'a, T> {
             self.pos - self.head.len()
         };
         buf.extend_from_slice(&self.tail[pos..]);
-        self.rb.advance_read(buf.len());
+        self.pos += buf.len();
         buf
     }
 }
 
-pub struct MutChunks<'a, T> {
-    rb: &'a RingBuf,
+impl<'a, T> Drop for Chunks<'a, T> {
+    fn drop(&mut self) {
+        if self.pos > 0 {
+            self.rb.advance_read(self.pos);
+        }
+    }
+}
+
+pub struct ChunksMut<'a, T> {
+    rb: &'a RingBuf<T>,
     head: &'a mut [T],
     tail: &'a mut [T],
     pos: usize,
     len: usize,
 }
 
-impl<'a, T> MutChunks<'a, T> {
-    pub fn new(rb: &'a RingBuf, head: &'a mut [T], tail: &'a mut [T]) -> Self {
+impl<'a, T> ChunksMut<'a, T> {
+    pub fn new(rb: &'a RingBuf<T>, head: &'a mut [T], tail: &'a mut [T]) -> Self {
         let len = head.len() + tail.len();
         Self {
             rb,
@@ -229,17 +248,27 @@ impl<'a, T> MutChunks<'a, T> {
     }
 
     #[inline]
+    pub fn head(&'a mut self) -> &'a mut [T] {
+        self.head
+    }
+
+    #[inline]
+    pub fn tail(&'a mut self) -> &'a mut [T] {
+        self.tail
+    }
+
+    #[inline]
     pub fn available(&self) -> usize {
         self.len - self.pos
     }
 
     #[inline]
     pub fn flush(self) {
-        self.rb.advance_write(self.pos);
+        // Consume self and drop
     }
 }
 
-impl<'a, T: Copy> MutChunks<'a, T> {
+impl<'a, T: Copy> ChunksMut<'a, T> {
     pub fn write(&mut self, src: &[T]) -> usize {
         if self.available() <= 0 {
             return 0;
@@ -256,6 +285,14 @@ impl<'a, T: Copy> MutChunks<'a, T> {
         }
         self.pos += write;
         write
+    }
+}
+
+impl<'a, T> Drop for ChunksMut<'a, T> {
+    fn drop(&mut self) {
+        if self.pos > 0 {
+            self.rb.advance_write(self.pos);
+        }
     }
 }
 

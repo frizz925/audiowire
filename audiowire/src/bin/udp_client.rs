@@ -6,21 +6,22 @@ use std::{
 
 use anyhow::{Ok as _Ok, Result};
 use audiowire::{
+    backend::config::Config,
     command::{DeviceConfig, add_device_args},
     logging,
     packet::{
-        Pack,
         command::{Command as CommandPacket, CommandClose},
-        data::{ClientData, ServerData},
+        data::{IncomingServerData, OutgoingClientData},
         handshake::{Handshake, HandshakeAck, HandshakeInit, HandshakeReply},
-        message::DecodedMessage,
+        message::{IncomingMessage, OutgoingMessage},
+        socket::{UdpWrapper, wrap_udp, wrap_udp_owned},
         stream::StreamFlags,
         time::{NetworkTime, get_current_timestamp},
     },
     stream::{Peer, handle_playback, handle_record},
 };
-use audiowire_serde::Deserialize;
-use bytes::{Buf, Bytes, BytesMut};
+use audiowire_serde::{Deserialize, Serialize};
+use bytes::Bytes;
 use clap::{Arg, Command};
 use slog::{Logger, debug, error, info, o};
 use tokio::{net::UdpSocket, sync::mpsc};
@@ -32,12 +33,12 @@ struct Client {
 
 impl Client {
     async fn handle_packet(&mut self, mut buf: Bytes) -> Result<()> {
-        match DecodedMessage::deserialize(&mut buf)? {
-            DecodedMessage::Data(mut buf) => {
-                let data = ServerData::deserialize(&mut buf)?;
+        match IncomingMessage::deserialize(&mut buf)? {
+            IncomingMessage::Data(mut buf) => {
+                let data = IncomingServerData::deserialize(&mut buf)?;
                 self.handle_data(data);
             }
-            DecodedMessage::Command(CommandPacket::Close(CommandClose(_))) => {
+            IncomingMessage::Command(CommandPacket::Close(_)) => {
                 self.running = false;
             }
             _ => (),
@@ -45,8 +46,14 @@ impl Client {
         Ok(())
     }
 
-    fn handle_data(&self, data: ServerData<Bytes>) {
-        self.inner.write(data.0);
+    fn handle_data(&self, data: IncomingServerData<Bytes>) {
+        self.as_ref().write(data.0);
+    }
+}
+
+impl AsRef<Peer> for Client {
+    fn as_ref(&self) -> &Peer {
+        &self.inner
     }
 }
 
@@ -95,30 +102,27 @@ async fn run(
         sink_enabled,
         opus_enabled,
     } = config;
-
-    let mut buf = BytesMut::with_capacity(2048);
-    let sock = Arc::new(UdpSocket::bind(":::0").await?);
+    let mut sock = wrap_udp_owned(UdpSocket::bind(":::0").await?);
 
     let org_timestamp = get_current_timestamp();
-    let init = HandshakeInit {
+    let init: Handshake = HandshakeInit {
         flags: StreamFlags {
             source_enabled,
             sink_enabled,
             opus_enabled,
         },
-    };
-    sock.send_to(init.pack().as_ref(), &saddr).await?;
+    }
+    .into();
+    sock.send_to(init, &saddr).await?;
 
-    let (_, addr) = sock.recv_buf_from(&mut buf).await?;
+    let (message, addr) = sock.recv_from().await?;
     let rec_timestamp = get_current_timestamp();
-    let message = DecodedMessage::deserialize(&mut buf)?;
-    buf.clear();
 
     let HandshakeReply {
         stream_id,
         flags,
         time,
-    } = if let DecodedMessage::Handshake(Handshake::Reply(reply)) = message {
+    } = if let IncomingMessage::Handshake(Handshake::Reply(reply)) = message {
         reply
     } else {
         error!(log, "We should get handshake reply here");
@@ -134,24 +138,29 @@ async fn run(
         "xmt_timestamp" => time.xmt_timestamp
     );
 
-    let ack = HandshakeAck {
+    let ack: Handshake = HandshakeAck {
         stream_id,
         time: NetworkTime {
             rec_timestamp,
             xmt_timestamp: get_current_timestamp(),
         },
-    };
-    sock.send_to(ack.pack().as_ref(), &saddr).await?;
+    }
+    .into();
+    sock.send_to(ack, &saddr).await?;
 
+    let sock = Arc::new(sock.into_inner());
     let record = if config.source_enabled && flags.sink_enabled {
         let log = log.new(o!("stream" => "record"));
         let stream = handle_record(
             &log,
+            Config::default(),
             name.as_str(),
             source_name,
             Arc::clone(&sock),
             addr,
-            move |buf| ClientData(stream_id, buf).pack(),
+            move |src, dst| {
+                OutgoingMessage::from(OutgoingClientData(stream_id, src)).serialize(dst)
+            },
         )?;
         debug!(log, "Record running");
         Some(stream)
@@ -161,7 +170,7 @@ async fn run(
 
     let playback = if config.sink_enabled && flags.source_enabled {
         let log = log.new(o!("stream" => "playback"));
-        let stream = handle_playback(&log, name.as_str(), sink_name)?;
+        let stream = handle_playback(&log, Config::default(), name.as_str(), sink_name)?;
         debug!(log, "Playback running");
         Some(stream)
     } else {
@@ -179,20 +188,22 @@ async fn run(
         tx.send(()).await.unwrap();
     });
 
+    let mut sock = wrap_udp(sock);
     while client.running {
-        let mut buf = BytesMut::with_capacity(65536);
         tokio::select! {
-            result = sock.recv_buf(&mut buf) => {
-                let recv = result?;
-                client.handle_packet(buf.copy_to_bytes(recv)).await?;
+            result = sock.raw_recv_from() => {
+                let (buf, addr) = result?;
+                if let Err(e) = client.handle_packet(buf).await {
+                    error!(log, "Failed to handle packet"; "addr" => addr, "error" => e);
+                }
             }
             _ = cancel_rx.recv() => {
                 break;
             }
         }
     }
-    sock.send_to(CommandClose(stream_id).pack().as_ref(), &addr)
-        .await?;
+    let cmd: CommandPacket = CommandClose(stream_id).into();
+    sock.send_to(cmd, &addr).await?;
 
     Ok(ExitCode::SUCCESS)
 }
