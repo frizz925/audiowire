@@ -9,6 +9,7 @@ audiowire_serde = { path = "./audiowire_serde" }
 audiowire_sys = { path = "./audiowire_sys" }
 bindgen = "0.72.1"
 bytes = { version = "1.11", default-features = false }
+chrono = "0.4.44"
 proc-macro2 = "1.0.106"
 quote = "1.0.44"
 syn = "2.0.117"
