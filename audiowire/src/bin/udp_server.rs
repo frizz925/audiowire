@@ -1,16 +1,25 @@
 use std::{
     collections::HashMap,
     net::{IpAddr, SocketAddr},
-    sync::{Arc, atomic::Ordering},
+    ops::Deref,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Instant,
 };
 
 use anyhow::{Ok as _Ok, Result};
 use audiowire::{
+    HEARTBEAT_GRACE_PERIOD, HEARTBEAT_INTERVAL,
     backend::config::Config,
     command::{DeviceConfig, add_device_args},
     logging,
     packet::{
-        command::{Command as CommandPacket, CommandClose},
+        command::{
+            client::{ClientClose, ClientCommand, ClientHeartbeat},
+            server::{SERVER_CLOSE, SERVER_HEARTBEAT},
+        },
         data::{IncomingClientData, OutgoingServerData},
         handshake::{Handshake, HandshakeAck, HandshakeInit, HandshakeReply},
         message::{IncomingMessage, OutgoingMessage},
@@ -25,12 +34,13 @@ use bytes::{Buf, Bytes};
 use clap::{Arg, Command, value_parser};
 use slog::{Logger, error, info, o, warn};
 use tokio::{
-    net::UdpSocket,
-    sync::{
-        RwLock,
-        mpsc::{self, error::SendError},
-    },
+    net::{ToSocketAddrs, UdpSocket},
+    sync::{Notify, RwLock},
+    time::sleep,
 };
+
+static RUNNING: AtomicBool = AtomicBool::new(true);
+static NOTIFY: Notify = Notify::const_new();
 
 struct Context<'a> {
     log: &'a Logger,
@@ -63,12 +73,12 @@ impl Server {
             IncomingMessage::Handshake(hs) => {
                 self.handle_handshake(context, hs).await?;
             }
-            IncomingMessage::Command(cmd) => {
+            IncomingMessage::ClientCommand(cmd) => {
                 self.handle_command(context, cmd).await?;
             }
             IncomingMessage::Data(mut buf) => {
                 let data = IncomingClientData::deserialize(&mut buf)?;
-                self.handle_data(context, data).await?;
+                self.handle_data(context, data).await;
             }
             _ => (),
         }
@@ -88,35 +98,36 @@ impl Server {
         Ok(())
     }
 
-    async fn handle_command<'a>(&self, context: Context<'a>, cmd: CommandPacket) -> Result<()> {
+    async fn handle_command<'a>(&self, context: Context<'a>, cmd: ClientCommand) -> Result<()> {
         let Context { log, .. } = context;
         match cmd {
-            CommandPacket::Close(CommandClose(stream_id)) => {
-                self.clients.write().await.remove(&stream_id);
-                info!(log, "Client closed"; "stream_id" => stream_id);
+            ClientCommand::Heartbeat(ClientHeartbeat(stream_id)) => {
+                if let Some(Client::Running(c)) = self.clients.write().await.get_mut(&stream_id) {
+                    info!(log, "Received client heartbeat"; "stream_id" => stream_id);
+                    c.last_heartbeat = Instant::now();
+                }
+            }
+            ClientCommand::Close(ClientClose(stream_id)) => {
+                if let Some(_) = self.clients.write().await.remove(&stream_id) {
+                    info!(log, "Client closed"; "stream_id" => stream_id);
+                }
             }
             _ => (),
         }
         Ok(())
     }
 
-    async fn handle_data<'a>(
-        &self,
-        context: Context<'a>,
-        data: IncomingClientData<Bytes>,
-    ) -> Result<(), SendError<Bytes>> {
+    async fn handle_data<'a>(&self, context: Context<'a>, data: IncomingClientData<Bytes>) {
         let Context { log, .. } = context;
         let IncomingClientData(stream_id, buf) = data;
         let log = log.new(o!("stream_id" => stream_id));
-
         if let Some(client) = self.clients.read().await.get(&stream_id) {
             if let Client::Running(c) = client {
-                c.inner.write(buf);
+                c.write(buf);
             } else {
                 warn!(log, "Received data packet for client that is not running");
             }
         }
-        Ok(())
     }
 
     async fn handle_handshake_init<'a>(
@@ -141,15 +152,17 @@ impl Server {
         let stream_id = self.next_stream_id.fetch_add(1, Ordering::Acquire);
         let xmt_timestamp = {
             let org_timestamp = get_current_timestamp();
-            let client = Client::Handshake(ClientHandshake {
+            let client = ClientHandshake {
                 flags,
                 org_timestamp,
-            });
+                last_handshake: Instant::now(),
+            }
+            .into();
             self.clients.write().await.insert(stream_id, client);
             org_timestamp
         };
 
-        let msg = OutgoingMessage::from(Handshake::from(HandshakeReply {
+        let msg: OutgoingMessage<_> = Handshake::from(HandshakeReply {
             stream_id,
             flags: StreamFlags {
                 source_enabled,
@@ -160,7 +173,8 @@ impl Server {
                 rec_timestamp,
                 xmt_timestamp,
             },
-        }));
+        })
+        .into();
         self.sock.send_to(msg.into_bytes().as_ref(), addr).await?;
         Ok(())
     }
@@ -203,6 +217,7 @@ impl Server {
         let ClientHandshake {
             flags,
             org_timestamp,
+            ..
         } = hs;
 
         let record = if self.config.source_enabled && flags.sink_enabled {
@@ -234,10 +249,12 @@ impl Server {
             None
         };
 
-        let client = Client::Running(ClientRunning {
+        let client = ClientRunning {
             inner: Peer::new(record, playback, &time, org_timestamp, rec_timestamp),
             addr: addr.to_owned(),
-        });
+            last_heartbeat: Instant::now(),
+        }
+        .into();
         self.clients.write().await.insert(stream_id, client);
 
         Ok(())
@@ -249,14 +266,107 @@ enum Client {
     Running(ClientRunning),
 }
 
+impl From<ClientHandshake> for Client {
+    fn from(value: ClientHandshake) -> Self {
+        Self::Handshake(value)
+    }
+}
+
+impl From<ClientRunning> for Client {
+    fn from(value: ClientRunning) -> Self {
+        Self::Running(value)
+    }
+}
+
 struct ClientHandshake {
     flags: StreamFlags,
     org_timestamp: u64,
+    last_handshake: Instant,
 }
 
 struct ClientRunning {
     inner: Peer,
     addr: SocketAddr,
+    last_heartbeat: Instant,
+}
+
+impl Deref for ClientRunning {
+    type Target = Peer;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+struct HeartbeatWorker {
+    log: Logger,
+    server: Arc<Server>,
+}
+
+impl HeartbeatWorker {
+    async fn run(self) {
+        let mut sock = wrap_udp(&self.server.sock);
+        while RUNNING.load(Ordering::Relaxed) {
+            let sock = sock.enter();
+            tokio::select! {
+                _ = sleep(HEARTBEAT_INTERVAL) => (),
+                _ = NOTIFY.notified() => break
+            }
+            self.check(sock).await;
+        }
+    }
+
+    async fn check<U, S>(&self, mut sock: S)
+    where
+        U: UdpWrapper,
+        S: AsMut<U>,
+    {
+        let dead = {
+            let mut stream_ids = Vec::new();
+            for (stream_id, client) in self.server.clients.read().await.iter() {
+                let last_instant = match client {
+                    Client::Handshake(c) => c.last_handshake,
+                    Client::Running(c) => {
+                        self.pulse(&mut sock, c.addr, *stream_id).await;
+                        c.last_heartbeat
+                    }
+                };
+                if last_instant.elapsed() > HEARTBEAT_GRACE_PERIOD {
+                    stream_ids.push(*stream_id);
+                }
+            }
+            stream_ids
+        };
+        if dead.len() > 0 {
+            let mut clients = self.server.clients.write().await;
+            for stream_id in dead {
+                clients.remove(&stream_id);
+                info!(
+                    self.log, "Removed client due to inactivity";
+                    "stream_id" => stream_id
+                );
+            }
+        }
+    }
+
+    async fn pulse<U, S, A>(&self, mut sock: S, addr: A, stream_id: StreamId)
+    where
+        U: UdpWrapper,
+        S: AsMut<U>,
+        A: ToSocketAddrs,
+    {
+        sock.as_mut()
+            .send_message_to(SERVER_HEARTBEAT, addr)
+            .await
+            .map_err(|e| {
+                error!(
+                    self.log, "Failed to send heartbeat";
+                    "stream_id" => stream_id,
+                    "error" => e
+                )
+            })
+            .ok();
+    }
 }
 
 fn cmd() -> Command {
@@ -300,24 +410,30 @@ fn main() -> Result<()> {
 async fn run(log: Logger, config: DeviceConfig, addr: SocketAddr) -> Result<()> {
     let sock = UdpSocket::bind(addr).await?;
     info!(log, "Server listening at {}", addr.to_string());
-    let server = Server::new(config, sock);
 
-    let (tx, mut rx) = mpsc::channel(1);
-    tokio::spawn(async move {
+    let server = Arc::new(Server::new(config, sock));
+    let mut handles = Vec::new();
+
+    // Signal handler
+    handles.push(tokio::spawn(async move {
         tokio::signal::ctrl_c().await.unwrap();
-        tx.send(()).await.unwrap();
-    });
+        RUNNING.store(false, Ordering::Relaxed);
+        NOTIFY.notify_waiters();
+    }));
+
+    // Heartbeat handler
+    let worker = HeartbeatWorker {
+        log: log.new(o!("worker" => "heartbeat")),
+        server: Arc::clone(&server),
+    };
+    handles.push(tokio::spawn(worker.run()));
 
     let mut sock = wrap_udp(&server.sock);
-    loop {
+    while RUNNING.load(Ordering::Relaxed) {
         let mut sock = sock.enter();
         let (buf, addr) = tokio::select! {
-            result = sock.raw_recv_from() => {
-                result?
-            }
-            _ = rx.recv() => {
-                break;
-            }
+            result = sock.raw_recv_from() => result?,
+            _ = NOTIFY.notified() => break
         };
         let rec_timestamp = get_current_timestamp();
 
@@ -332,13 +448,17 @@ async fn run(log: Logger, config: DeviceConfig, addr: SocketAddr) -> Result<()> 
         }
     }
 
-    for (stream_id, client) in server.clients.read().await.iter() {
+    for client in server.clients.read().await.values() {
         if let Client::Running(ClientRunning { addr, .. }) = client {
-            let cmd: CommandPacket = CommandClose(*stream_id).into();
-            sock.send_message_to(cmd, addr).await?;
+            sock.send_message_to(SERVER_CLOSE, addr).await?;
         }
     }
     info!(log, "Server stopped listening");
+
+    for handle in handles {
+        handle.abort();
+        handle.await.ok();
+    }
 
     _Ok(())
 }

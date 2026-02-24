@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use bytes::Bytes;
 
 use crate::packet::time::NetworkTime;
@@ -5,7 +7,7 @@ use crate::packet::time::NetworkTime;
 use super::{playback::PlaybackStream, record::RecordStream};
 
 pub struct Peer {
-    pub rtt: u64,
+    pub rtt: Duration,
     pub record: Option<RecordStream>,
     pub playback: Option<PlaybackStream>,
 }
@@ -19,9 +21,11 @@ impl Peer {
         rec_timestamp: u64,
     ) -> Self {
         Self {
-            rtt: rec_timestamp
-                .abs_diff(org_timestamp)
-                .abs_diff(time.xmt_timestamp.abs_diff(time.rec_timestamp)),
+            rtt: Duration::from_millis(
+                rec_timestamp
+                    .abs_diff(org_timestamp)
+                    .abs_diff(time.xmt_timestamp.abs_diff(time.rec_timestamp)),
+            ),
             record,
             playback,
         }

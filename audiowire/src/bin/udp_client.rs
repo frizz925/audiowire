@@ -1,21 +1,29 @@
 use std::{
     net::{SocketAddr, ToSocketAddrs},
     process::ExitCode,
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Instant,
 };
 
 use anyhow::{Ok as _Ok, Result};
 use audiowire::{
+    HEARTBEAT_GRACE_PERIOD, HEARTBEAT_INTERVAL,
     backend::config::Config,
     command::{DeviceConfig, add_device_args},
     logging,
     packet::{
-        command::{Command as CommandPacket, CommandClose},
+        command::{
+            client::{ClientClose, ClientCommand, ClientHeartbeat},
+            server::ServerCommand,
+        },
         data::{IncomingServerData, OutgoingClientData},
         handshake::{Handshake, HandshakeAck, HandshakeInit, HandshakeReply},
         message::{IncomingMessage, OutgoingMessage},
         socket::{UdpWrapper, wrap_udp, wrap_udp_owned},
-        stream::StreamFlags,
+        stream::{StreamFlags, StreamId},
         time::{NetworkTime, get_current_timestamp},
     },
     stream::{Peer, handle_playback, handle_record},
@@ -24,23 +32,41 @@ use audiowire_serde::{Deserialize, Serialize};
 use bytes::Bytes;
 use clap::{Arg, Command};
 use slog::{Logger, debug, error, info, o};
-use tokio::{net::UdpSocket, sync::mpsc};
+use tokio::{
+    net::UdpSocket,
+    sync::{Notify, RwLock},
+    time::sleep,
+};
+
+static RUNNING: AtomicBool = AtomicBool::new(true);
+static NOTIFY: Notify = Notify::const_new();
 
 struct Client {
     inner: Peer,
-    running: bool,
+    log: Logger,
+
+    last_heartbeat: RwLock<Instant>,
 }
 
 impl Client {
-    async fn handle_packet(&mut self, mut buf: Bytes) -> Result<()> {
+    async fn handle_packet(&self, mut buf: Bytes) -> Result<()> {
         match IncomingMessage::deserialize(&mut buf)? {
             IncomingMessage::Data(mut buf) => {
                 let data = IncomingServerData::deserialize(&mut buf)?;
                 self.handle_data(data);
             }
-            IncomingMessage::Command(CommandPacket::Close(_)) => {
-                self.running = false;
-            }
+            IncomingMessage::ServerCommand(cmd) => match cmd {
+                ServerCommand::Heartbeat(_) => {
+                    info!(self.log, "Received server heartbeat");
+                    let mut value = self.last_heartbeat.write().await;
+                    *value = Instant::now();
+                }
+                ServerCommand::Close(_) => {
+                    info!(self.log, "Server closed");
+                    stop();
+                }
+                _ => (),
+            },
             _ => (),
         }
         Ok(())
@@ -54,6 +80,54 @@ impl Client {
 impl AsRef<Peer> for Client {
     fn as_ref(&self) -> &Peer {
         &self.inner
+    }
+}
+
+struct HeartbeatWorker {
+    log: Logger,
+    client: Arc<Client>,
+    stream_id: StreamId,
+    sock: Arc<UdpSocket>,
+    addr: SocketAddr,
+}
+
+impl HeartbeatWorker {
+    async fn run(self) {
+        let mut sock = wrap_udp(&self.sock);
+        while RUNNING.load(Ordering::Relaxed) {
+            if !self.check().await {
+                break;
+            }
+            self.pulse(sock.enter()).await;
+        }
+    }
+
+    async fn check(&self) -> bool {
+        tokio::select! {
+            _ = sleep(HEARTBEAT_INTERVAL) => (),
+            _ = NOTIFY.notified() => return false
+        }
+        let elapsed = self.client.last_heartbeat.read().await.elapsed();
+        if elapsed > HEARTBEAT_GRACE_PERIOD {
+            info!(self.log, "Closing due to server inactivity");
+            stop();
+            false
+        } else {
+            true
+        }
+    }
+
+    async fn pulse<U, S>(&self, mut sock: S)
+    where
+        U: UdpWrapper,
+        S: AsMut<U>,
+    {
+        let cmd: ClientCommand = ClientHeartbeat(self.stream_id).into();
+        sock.as_mut()
+            .send_message_to(cmd, self.addr)
+            .await
+            .map_err(|e| error!(self.log, "Failed to send heartbeat"; "error" => e))
+            .ok();
     }
 }
 
@@ -177,34 +251,55 @@ async fn run(
         None
     };
 
-    let mut client = Client {
+    let client = Arc::new(Client {
         inner: Peer::new(record, playback, &time, org_timestamp, rec_timestamp),
-        running: true,
-    };
+        log: log.clone(),
 
-    let (tx, mut cancel_rx) = mpsc::channel(1);
-    tokio::spawn(async move {
+        last_heartbeat: RwLock::new(Instant::now()),
+    });
+    let mut handles = Vec::new();
+
+    // Cancel handler
+    handles.push(tokio::spawn(async move {
         tokio::signal::ctrl_c().await.unwrap();
-        tx.send(()).await.unwrap();
+        stop();
+    }));
+
+    // Heartbeat monitor
+    handles.push({
+        let worker = HeartbeatWorker {
+            client: Arc::clone(&client),
+            log: log.new(o!("worker" => "heartbeat")),
+            stream_id,
+            sock: Arc::clone(&sock),
+            addr,
+        };
+        tokio::spawn(worker.run())
     });
 
     let mut sock = wrap_udp(sock);
-    while client.running {
+    while RUNNING.load(Ordering::Relaxed) {
         let mut sock = sock.enter();
-        tokio::select! {
-            result = sock.raw_recv_from() => {
-                let (buf, addr) = result?;
-                if let Err(e) = client.handle_packet(buf).await {
-                    error!(log, "Failed to handle packet"; "addr" => addr, "error" => e);
-                }
-            }
-            _ = cancel_rx.recv() => {
-                break;
-            }
+        let (buf, addr) = tokio::select! {
+            result = sock.raw_recv_from() => result?,
+            _ = NOTIFY.notified() => break
+        };
+        if let Err(e) = client.handle_packet(buf).await {
+            error!(log, "Failed to handle packet"; "addr" => addr, "error" => e);
         }
     }
-    let cmd: CommandPacket = CommandClose(stream_id).into();
+    let cmd: ClientCommand = ClientClose(stream_id).into();
     sock.send_message_to(cmd, &addr).await?;
 
+    for handle in handles {
+        handle.abort();
+        handle.await.ok();
+    }
+
     Ok(ExitCode::SUCCESS)
+}
+
+fn stop() {
+    RUNNING.store(false, Ordering::Relaxed);
+    NOTIFY.notify_waiters();
 }

@@ -70,10 +70,8 @@ impl RecordWorker {
         let bufsize = config.buffer_size();
         loop {
             tokio::select! {
-                _ = self.data_notify.notified() => {}
-                _ = self.cancel_notify.notified() => {
-                    break;
-                }
+                _ = self.data_notify.notified() => (),
+                _ = self.cancel_notify.notified() => break
             }
             let mut src = rb.read_chunks();
             while src.remaining() >= bufsize {

@@ -3,6 +3,8 @@ use bytes::{BufMut, Bytes, BytesMut};
 
 use super::{command, handshake};
 
+pub const DATA_MESSAGE_CODE: u8 = 128;
+
 pub struct OutgoingMessage<T> {
     pub code: u8,
     pub message: T,
@@ -56,7 +58,7 @@ macro_rules! message_types {
                     $(
                         Self::$name(_) => $code,
                     )*
-                    Self::Data(_) => 10,
+                    Self::Data(_) => DATA_MESSAGE_CODE,
                     Self::Unknown(code) => *code,
                 }
             }
@@ -68,7 +70,7 @@ macro_rules! message_types {
                     $(
                         $code => Self::$name(<$type as Deserialize>::deserialize(buf)?),
                     )*
-                    10 => Self::Data(buf.copy_to_bytes(buf.remaining())),
+                    DATA_MESSAGE_CODE => Self::Data(buf.copy_to_bytes(buf.remaining())),
                     code => Self::Unknown(code),
                 };
                 Ok(message)
@@ -87,5 +89,6 @@ macro_rules! message_types {
 
 message_types! {
     1 => (Handshake, handshake::Handshake),
-    2 => (Command, command::Command),
+    11 => (ServerCommand, command::server::ServerCommand),
+    21 => (ClientCommand, command::client::ClientCommand),
 }

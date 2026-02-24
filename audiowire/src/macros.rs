@@ -6,6 +6,7 @@ macro_rules! message_enum {
             $code:literal => ($name:ident, $struct:ty),
         )+
     ) => {
+        #[non_exhaustive]
         pub enum $enum {
             $(
                 $name($struct),
