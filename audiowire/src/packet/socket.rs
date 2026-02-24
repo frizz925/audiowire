@@ -1,6 +1,7 @@
 use std::{
     io::{Error, ErrorKind, Result},
     net::SocketAddr,
+    ops::{Deref, DerefMut},
 };
 
 use audiowire_serde::{Deserialize, Serialize};
@@ -88,42 +89,6 @@ pub struct WrapperGuard<'a, T: UdpWrapper> {
     inner: &'a mut T,
 }
 
-impl<'a, U: UdpWrapper> UdpWrapper for WrapperGuard<'a, U> {
-    fn recv_from(&mut self) -> impl Future<Output = Result<(IncomingMessage, SocketAddr)>> {
-        self.inner.recv_from()
-    }
-
-    fn send_to<T, A>(&mut self, value: T, addr: A) -> impl Future<Output = Result<()>>
-    where
-        T: Into<OutgoingMessage<T>> + Serialize,
-        A: ToSocketAddrs,
-    {
-        self.inner.send_to(value, addr)
-    }
-
-    fn raw_recv_from(&mut self) -> impl Future<Output = Result<(Bytes, SocketAddr)>> {
-        self.inner.raw_recv_from()
-    }
-
-    fn raw_send_to<B, A>(&self, buf: B, addr: A) -> impl Future<Output = Result<usize>>
-    where
-        B: AsRef<[u8]>,
-        A: ToSocketAddrs,
-    {
-        self.inner.raw_send_to(buf, addr)
-    }
-
-    fn reset(&mut self) {
-        self.inner.reset();
-    }
-}
-
-impl<'a, T: UdpWrapper> Drop for WrapperGuard<'a, T> {
-    fn drop(&mut self) {
-        self.reset();
-    }
-}
-
 impl<'a, T: UdpWrapper> AsRef<T> for WrapperGuard<'a, T> {
     fn as_ref(&self) -> &T {
         self.inner
@@ -133,6 +98,26 @@ impl<'a, T: UdpWrapper> AsRef<T> for WrapperGuard<'a, T> {
 impl<'a, T: UdpWrapper> AsMut<T> for WrapperGuard<'a, T> {
     fn as_mut(&mut self) -> &mut T {
         self.inner
+    }
+}
+
+impl<'a, T: UdpWrapper> Deref for WrapperGuard<'a, T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        self.inner
+    }
+}
+
+impl<'a, T: UdpWrapper> DerefMut for WrapperGuard<'a, T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.inner
+    }
+}
+
+impl<'a, T: UdpWrapper> Drop for WrapperGuard<'a, T> {
+    fn drop(&mut self) {
+        self.reset();
     }
 }
 
