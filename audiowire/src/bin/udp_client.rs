@@ -190,6 +190,7 @@ async fn run(
 
     let mut sock = wrap_udp(sock);
     while client.running {
+        let mut sock = sock.enter();
         tokio::select! {
             result = sock.raw_recv_from() => {
                 let (buf, addr) = result?;

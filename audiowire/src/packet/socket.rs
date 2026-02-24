@@ -32,8 +32,8 @@ pub trait UdpWrapper: Sized {
         B: AsRef<[u8]>,
         A: ToSocketAddrs;
 
-    fn enter<'a>(&'a mut self) -> BufferGuard<'a, Self> {
-        BufferGuard { inner: self }
+    fn enter<'a>(&'a mut self) -> WrapperGuard<'a, Self> {
+        WrapperGuard { inner: self }
     }
 
     fn reset(&mut self);
@@ -84,11 +84,11 @@ impl<U: UdpWrapperInner + AsRef<UdpSocket>> UdpWrapper for U {
     }
 }
 
-pub struct BufferGuard<'a, T: UdpWrapper> {
+pub struct WrapperGuard<'a, T: UdpWrapper> {
     inner: &'a mut T,
 }
 
-impl<'a, U: UdpWrapper> UdpWrapper for BufferGuard<'a, U> {
+impl<'a, U: UdpWrapper> UdpWrapper for WrapperGuard<'a, U> {
     fn recv_from(&mut self) -> impl Future<Output = Result<(IncomingMessage, SocketAddr)>> {
         self.inner.recv_from()
     }
@@ -118,19 +118,19 @@ impl<'a, U: UdpWrapper> UdpWrapper for BufferGuard<'a, U> {
     }
 }
 
-impl<'a, T: UdpWrapper> Drop for BufferGuard<'a, T> {
+impl<'a, T: UdpWrapper> Drop for WrapperGuard<'a, T> {
     fn drop(&mut self) {
         self.reset();
     }
 }
 
-impl<'a, T: UdpWrapper> AsRef<T> for BufferGuard<'a, T> {
+impl<'a, T: UdpWrapper> AsRef<T> for WrapperGuard<'a, T> {
     fn as_ref(&self) -> &T {
         self.inner
     }
 }
 
-impl<'a, T: UdpWrapper> AsMut<T> for BufferGuard<'a, T> {
+impl<'a, T: UdpWrapper> AsMut<T> for WrapperGuard<'a, T> {
     fn as_mut(&mut self) -> &mut T {
         self.inner
     }
