@@ -38,7 +38,7 @@ impl Deserialize for DecodedMessage {
 macro_rules! message_types {
     (
         $(
-            ($code:literal, $name:ident, $type:ty),
+            $code:literal => ($name:ident, $type:ty),
         )+
     ) => {
         #[non_exhaustive]
@@ -92,6 +92,6 @@ macro_rules! message_types {
 }
 
 message_types! {
-    (1, Handshake, handshake::Handshake),
-    (2, Command, command::Command),
+    1 => (Handshake, handshake::Handshake),
+    2 => (Command, command::Command),
 }

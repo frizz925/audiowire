@@ -7,5 +7,5 @@ pub struct CommandClose(pub StreamId);
 
 message_enum! {
     Command;
-    (1, Close, CommandClose),
+    1 => (Close, CommandClose),
 }

@@ -3,7 +3,7 @@ macro_rules! message_enum {
     (
         $enum:ident;
         $(
-            ($code:literal, $name:ident, $struct:ty),
+            $code:literal => ($name:ident, $struct:ty),
         )+
     ) => {
         pub enum $enum {

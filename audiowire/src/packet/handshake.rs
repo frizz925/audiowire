@@ -30,7 +30,7 @@ pub struct HandshakeAck {
 
 message_enum! {
     Handshake;
-    (1, Init, HandshakeInit),
-    (2, Reply, HandshakeReply),
-    (3, Ack, HandshakeAck),
+    1 => (Init, HandshakeInit),
+    2 => (Reply, HandshakeReply),
+    3 => (Ack, HandshakeAck),
 }
