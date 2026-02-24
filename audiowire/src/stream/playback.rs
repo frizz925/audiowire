@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use bytes::Buf;
-use slog::{Logger, debug, info};
+use slog::{Logger, debug, info, warn};
 
 use crate::{
     backend::stream::{Stream, StreamBuilder},
@@ -21,13 +21,9 @@ impl PlaybackStream {
         debug!(self.log, "Received data {} bytes", buf.remaining());
         let Self { rb, .. } = self;
         while buf.remaining() > 0 && rb.available() > 0 {
-            let src = buf.chunk();
-            let dst = rb.write_chunk();
-            let write = usize::min(src.len(), dst.len());
-            dst[..write].copy_from_slice(&src[..write]);
-
-            buf.advance(write);
-            rb.advance_write(write);
+            let mut dst = rb.write_chunks();
+            buf.advance(dst.write(buf.chunk()));
+            dst.flush();
         }
     }
 }
@@ -39,16 +35,20 @@ where
 {
     let rb = Arc::new(RingBuf::new(65536));
     let stream_rb = Arc::clone(&rb);
+    let stream_log = log.to_owned();
     let stream = StreamBuilder::default()
         .write_cb(move |dst| {
-            let rb = &stream_rb;
-            let src = rb.read_chunk();
-            let read = usize::min(src.len(), dst.len());
-
-            if read >= dst.len() {
-                dst[..read].copy_from_slice(&src[..read]);
-                rb.advance_read(read);
+            let (rb, log) = (&stream_rb, &stream_log);
+            let mut src = rb.read_chunks();
+            if src.remaining() >= dst.len() {
+                src.read(dst);
+                src.free();
             } else {
+                warn!(
+                    log, "Buffer underflow!";
+                    "requested" => dst.len(),
+                    "available" => src.remaining()
+                );
                 dst.fill(0);
             }
         })

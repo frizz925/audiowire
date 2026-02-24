@@ -69,11 +69,11 @@ impl RecordWorker {
         serialize: impl SerializeFn,
         buf: Bytes,
     ) -> std::io::Result<()> {
-        let send = self
+        let sent = self
             .sock
             .send_to(serialize(buf).as_ref(), &self.addr)
             .await?;
-        debug!(self.log, "Sent data {} bytes", send);
+        debug!(self.log, "Sent data {} bytes", sent);
         Ok(())
     }
 }

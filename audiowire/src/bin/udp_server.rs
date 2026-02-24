@@ -220,6 +220,7 @@ impl Server {
         };
 
         let playback = if self.config.sink_enabled && flags.source_enabled {
+            let log = log.new(o!("stream" => "playback"));
             let stream = handle_playback(&log, addr.to_string(), self.config.sink_name.as_deref())?;
             Some(stream)
         } else {
