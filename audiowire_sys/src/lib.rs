@@ -50,8 +50,8 @@ mod tests {
                 channels: 2,
                 sample_rate: 48000,
                 sample_format: aw_sample_format_AW_SAMPLE_FORMAT_S16,
-                buffer_frames: 960,
-                max_buffer_frames: 1920,
+                buffer_samples: 960,
+                max_buffer_samples: 1920,
             };
 
             let record_name = CString::new("record-test").unwrap();

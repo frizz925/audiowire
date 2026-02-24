@@ -10,8 +10,8 @@
 #define CHANNELS 2
 #define SAMPLE_RATE 48000
 #define SAMPLE_FORMAT AW_SAMPLE_FORMAT_S16
-#define PACKET_FRAME_SIZE 960
-#define BUFFER_FRAME_SIZE 5760
+#define PACKET_SAMPLE_COUNT 960
+#define BUFFER_SAMPLE_COUNT 5760
 #define AUDIO_BUFSIZE 65536
 
 #define assert_aw_result(res) check_aw_result(res, __FUNCTION__, __FILE_NAME__, __LINE__, #res)
@@ -45,8 +45,8 @@ int main() {
         .channels = CHANNELS,
         .sample_rate = SAMPLE_RATE,
         .sample_format = SAMPLE_FORMAT,
-        .buffer_frames = PACKET_FRAME_SIZE,
-        .max_buffer_frames = BUFFER_FRAME_SIZE,
+        .buffer_samples = PACKET_SAMPLE_COUNT,
+        .max_buffer_samples = BUFFER_SAMPLE_COUNT,
     };
 
     atomic_size_t read_bytes = 0;

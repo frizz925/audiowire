@@ -7,7 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define MAX_BUFFER_FRAMES 65536
+#define MAX_BUFFER_SAMPLES 65536
 
 #define AW_RESULT_DEVICE_NOT_FOUND aw_result(-1, "Device not found")
 
@@ -21,18 +21,8 @@ typedef struct aw_stream_base {
     void *userdata;
 } aw_stream_base_t;
 
-// Sample is a single unit of value, eg. u16 or f32.
-// Frame is a collection of samples from all channels.
-// eg. a frame of stereo channel is basically sample[2]
-// Frames per duration is a collection of frames within a certain duration.
-// eg. 20ms duration with 48k sample rate contains 960 frames
-
-static inline size_t frame_size(const aw_config_t *cfg) {
-    return cfg->channels * aw_sample_size(cfg->sample_format);
-}
-
-static inline size_t frame_buffer_size(const aw_config_t *cfg, size_t count) {
-    return count * frame_size(cfg);
+static inline size_t sample_buffer_size(const aw_config_t *cfg, size_t count) {
+    return count * cfg->channels * aw_sample_size(cfg->sample_format);
 }
 
 static inline aw_result_t aw_result(int code, const char *message) {

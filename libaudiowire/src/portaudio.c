@@ -73,10 +73,10 @@ static aw_result_t start_stream(aw_stream_t **s,
                                 bool is_input,
                                 aw_error_callback_t error_cb,
                                 void *userdata) {
-    assert(cfg.buffer_frames > 0);
-    assert(cfg.max_buffer_frames > 0);
-    assert(cfg.max_buffer_frames >= cfg.buffer_frames);
-    assert(cfg.max_buffer_frames <= MAX_BUFFER_FRAMES);
+    assert(cfg.buffer_samples > 0);
+    assert(cfg.max_buffer_samples > 0);
+    assert(cfg.max_buffer_samples >= cfg.buffer_samples);
+    assert(cfg.max_buffer_samples <= MAX_BUFFER_FRAMES);
 
     const char *message = NULL;
     PaError err = paNoError;
@@ -121,7 +121,7 @@ static aw_result_t start_stream(aw_stream_t **s,
                         is_input ? &params : NULL,
                         is_input ? NULL : &params,
                         cfg.sample_rate,
-                        cfg.buffer_frames,
+                        cfg.buffer_samples,
                         paNoFlag,
                         is_input ? on_stream_read : on_stream_write,
                         stream);
