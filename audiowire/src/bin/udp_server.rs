@@ -415,6 +415,7 @@ fn main() -> Result<()> {
     let config = Config::default();
     let log = logging::initialize();
 
+    audiowire::initialize()?;
     info!(log, "Starting audio check");
     audio_check(&log, &config, &device)?;
     info!(log, "Audio check finished");
