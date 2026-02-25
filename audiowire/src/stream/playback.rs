@@ -1,42 +1,39 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use bytes::Buf;
-use slog::{Logger, debug, info, warn};
+use bytes::{Buf, BytesMut};
+use slog::{Logger, info, warn};
 
 use crate::{
     backend::{
         config::Config,
         stream::{Stream, StreamBuilder},
     },
-    opus::{ChannelsParser, convert_slice},
+    opus::convert_slice_mut,
     ringbuf::RingBuf,
     stream::error::create_error_cb,
 };
 
 pub struct PlaybackStream {
     pub inner: Stream,
-    log: Logger,
     config: Config,
     rb: Arc<RingBuf<u8>>,
-    decoder: Option<(opus::Decoder, Vec<i16>)>,
+    decoder: Option<(opus::Decoder, BytesMut)>,
 }
 
 impl PlaybackStream {
     pub fn write(&mut self, buf: &mut impl Buf) -> opus::Result<()> {
         let Self {
-            log,
             config,
             rb,
             decoder,
             ..
         } = self;
-        debug!(log, "Received data {} bytes", buf.remaining());
 
         let src = if let Some((dec, tmp)) = decoder {
-            let cnt = dec.decode(buf.chunk(), tmp.as_mut_slice(), false)?;
-            let len = cnt * config.channels as usize * config.sample_format.size();
-            convert_slice(tmp.as_slice(), len)
+            let cnt = dec.decode(buf.chunk(), convert_slice_mut(tmp), false)?;
+            let len = config.frame_count_to_bytes(cnt);
+            &tmp[..len]
         } else {
             buf.chunk()
         };
@@ -58,7 +55,7 @@ unsafe impl Sync for PlaybackStream {}
 
 pub fn handle_playback<N, D>(
     log: &Logger,
-    config: Config,
+    config: &Config,
     name: N,
     device: Option<D>,
     opus_enabled: bool,
@@ -95,10 +92,8 @@ where
     );
 
     let decoder = if opus_enabled {
-        let len = config.max_buffer_size() / size_of::<i16>();
-        let channels = opus::Channels::from_u8(config.channels);
-        let dec = opus::Decoder::new(config.sample_rate, channels).unwrap();
-        let buf = vec![0; len];
+        let dec = opus::Decoder::new(config.sample_rate, config.opus_channels()).unwrap();
+        let buf = BytesMut::zeroed(config.max_buffer_size());
         Some((dec, buf))
     } else {
         None
@@ -106,8 +101,7 @@ where
 
     Ok(PlaybackStream {
         inner: stream,
-        log: log.to_owned(),
-        config,
+        config: config.clone(),
         rb,
         decoder,
     })

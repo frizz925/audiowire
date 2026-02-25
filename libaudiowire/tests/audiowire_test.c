@@ -46,8 +46,8 @@ int main() {
         .channels = CHANNELS,
         .sample_rate = SAMPLE_RATE,
         .sample_format = SAMPLE_FORMAT,
-        .buffer_samples = PACKET_SAMPLE_COUNT,
-        .max_buffer_samples = BUFFER_SAMPLE_COUNT,
+        .buffer_frames = PACKET_SAMPLE_COUNT,
+        .max_buffer_frames = BUFFER_SAMPLE_COUNT,
     };
 
     atomic_size_t read_bytes = 0;

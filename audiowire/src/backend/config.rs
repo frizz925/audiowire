@@ -5,6 +5,8 @@ use audiowire_sys::{
     aw_sample_size,
 };
 
+use crate::opus::ChannelsParser;
+
 #[derive(Clone, Copy)]
 pub enum SampleFormat {
     S16 = aw_sample_format_AW_SAMPLE_FORMAT_S16 as isize,
@@ -22,38 +24,53 @@ pub struct Config {
     pub channels: u8,
     pub sample_rate: u32,
     pub sample_format: SampleFormat,
-    pub buffer_samples: usize,
-    pub max_buffer_samples: usize,
+    pub buffer_frames: usize,
+    pub max_buffer_frames: usize,
 }
 
 impl Config {
     #[inline]
+    pub fn sample_size(&self) -> usize {
+        self.sample_format.size()
+    }
+
+    #[inline]
+    pub fn frame_size(&self) -> usize {
+        self.channels as usize * self.sample_size()
+    }
+
+    #[inline]
     pub fn buffer_size(&self) -> usize {
-        self.sample_count_to_bytes(self.buffer_samples)
+        self.frame_count_to_bytes(self.buffer_frames)
     }
 
     #[inline]
     pub fn buffer_duration(&self) -> Duration {
-        self.sample_count_to_duration(self.buffer_samples)
+        self.frame_count_to_duration(self.buffer_frames)
     }
 
     #[inline]
     pub fn max_buffer_size(&self) -> usize {
-        self.sample_count_to_bytes(self.max_buffer_samples)
+        self.frame_count_to_bytes(self.max_buffer_frames)
     }
 
     #[inline]
     pub fn max_buffer_duration(&self) -> Duration {
-        self.sample_count_to_duration(self.max_buffer_samples)
+        self.frame_count_to_duration(self.max_buffer_frames)
     }
 
     #[inline]
-    fn sample_count_to_bytes(&self, count: usize) -> usize {
-        count * (self.channels as usize) * self.sample_format.size()
+    pub fn opus_channels(&self) -> opus::Channels {
+        opus::Channels::from_u8(self.channels)
     }
 
     #[inline]
-    fn sample_count_to_duration(&self, count: usize) -> Duration {
+    pub fn frame_count_to_bytes(&self, count: usize) -> usize {
+        count * self.frame_size()
+    }
+
+    #[inline]
+    pub fn frame_count_to_duration(&self, count: usize) -> Duration {
         let ms = count * 1000 / (self.sample_rate as usize);
         Duration::from_millis(ms as u64)
     }
@@ -65,8 +82,8 @@ impl Default for Config {
             channels: 2,
             sample_rate: 48000,
             sample_format: SampleFormat::S16,
-            buffer_samples: 960,
-            max_buffer_samples: 14400,
+            buffer_frames: 960,
+            max_buffer_frames: 14400,
         }
     }
 }
@@ -77,8 +94,8 @@ impl Into<aw_config> for Config {
             channels: self.channels,
             sample_rate: self.sample_rate,
             sample_format: self.sample_format as u32,
-            buffer_samples: self.buffer_samples as u32,
-            max_buffer_samples: self.max_buffer_samples as u32,
+            buffer_frames: self.buffer_frames as u32,
+            max_buffer_frames: self.max_buffer_frames as u32,
         }
     }
 }

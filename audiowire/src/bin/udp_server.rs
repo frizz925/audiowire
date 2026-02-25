@@ -12,7 +12,7 @@ use std::{
 use anyhow::{Ok as _Ok, Result};
 use audiowire::{
     HEARTBEAT_GRACE_PERIOD, HEARTBEAT_INTERVAL,
-    backend::config::Config,
+    backend::{config::Config, util::audio_check},
     command::{DeviceConfig, add_device_args},
     logging,
     packet::{
@@ -32,7 +32,7 @@ use audiowire::{
 use audiowire_serde::{Deserialize, Serialize};
 use bytes::{Buf, Bytes};
 use clap::{Arg, Command, value_parser};
-use slog::{Logger, error, info, o, warn};
+use slog::{Logger, debug, error, info, o, warn};
 use tokio::{
     net::{ToSocketAddrs, UdpSocket},
     sync::{Notify, RwLock},
@@ -49,7 +49,8 @@ struct Context<'a> {
 }
 
 struct Server {
-    config: DeviceConfig,
+    config: Config,
+    device: DeviceConfig,
     sock: Arc<UdpSocket>,
 
     next_stream_id: AtomicStreamId,
@@ -57,9 +58,10 @@ struct Server {
 }
 
 impl Server {
-    fn new(config: DeviceConfig, sock: UdpSocket) -> Self {
+    fn new(config: Config, device: DeviceConfig, sock: UdpSocket) -> Self {
         Self {
             config,
+            device,
             sock: Arc::new(sock),
 
             next_stream_id: AtomicStreamId::new(1),
@@ -144,7 +146,7 @@ impl Server {
             sink_enabled,
             opus_enabled,
             ..
-        } = self.config.to_owned();
+        } = self.device.to_owned();
         let Context {
             log,
             addr,
@@ -223,15 +225,15 @@ impl Server {
             org_timestamp,
             ..
         } = hs;
-        let opus_enabled = self.config.opus_enabled && flags.opus_enabled;
+        let opus_enabled = self.device.opus_enabled && flags.opus_enabled;
 
-        let record = if self.config.source_enabled && flags.sink_enabled {
+        let record = if self.device.source_enabled && flags.sink_enabled {
             let log = log.new(o!("stream" => "record"));
             let stream = handle_record(
                 &log,
-                Config::default(),
+                &self.config,
                 addr.to_string(),
-                self.config.source_name.as_deref(),
+                self.device.source_name.as_deref(),
                 Arc::clone(&self.sock),
                 addr.to_owned(),
                 move |src, dst| OutgoingMessage::from(OutgoingServerData(src)).serialize(dst),
@@ -242,13 +244,13 @@ impl Server {
             None
         };
 
-        let playback = if self.config.sink_enabled && flags.source_enabled {
+        let playback = if self.device.sink_enabled && flags.source_enabled {
             let log = log.new(o!("stream" => "playback"));
             let stream = handle_playback(
                 &log,
-                Config::default(),
+                &self.config,
                 addr.to_string(),
-                self.config.sink_name.as_deref(),
+                self.device.sink_name.as_deref(),
                 opus_enabled,
             )?;
             Some(stream)
@@ -404,27 +406,31 @@ fn cmd() -> Command {
 }
 
 fn main() -> Result<()> {
-    let log = logging::initialize();
-    audiowire::initialize()?;
-
     let matches = cmd().get_matches();
     let host = matches.get_one("host").map(IpAddr::to_owned).unwrap();
     let port = matches.get_one("port").map(u16::to_owned).unwrap();
     let addr = SocketAddr::new(host, port);
 
-    let config = DeviceConfig::from(&matches);
-    let result =
-        tokio::runtime::Runtime::new()?.block_on(async move { run(log, config, addr).await });
+    let device = DeviceConfig::from(&matches);
+    let config = Config::default();
+    let log = logging::initialize();
+
+    info!(log, "Starting audio check");
+    audio_check(&log, &config, &device)?;
+    info!(log, "Audio check finished");
+
+    let result = tokio::runtime::Runtime::new()?
+        .block_on(async move { run(log, config, device, addr).await });
 
     audiowire::terminate()?;
     result
 }
 
-async fn run(log: Logger, config: DeviceConfig, addr: SocketAddr) -> Result<()> {
+async fn run(log: Logger, config: Config, device: DeviceConfig, addr: SocketAddr) -> Result<()> {
     let sock = UdpSocket::bind(addr).await?;
     info!(log, "Server listening at {}", addr.to_string());
 
-    let server = Arc::new(Server::new(config, sock));
+    let server = Arc::new(Server::new(config, device, sock));
     let mut handles = Vec::new();
 
     // Signal handler
@@ -448,6 +454,7 @@ async fn run(log: Logger, config: DeviceConfig, addr: SocketAddr) -> Result<()> 
             result = sock.raw_recv_from() => result?,
             _ = NOTIFY.notified() => break
         };
+        debug!(log, "Received data {} bytes", buf.remaining(); "addr" => addr);
         let rec_timestamp = get_current_timestamp();
 
         let log = log.new(o!("addr" => addr.to_string()));

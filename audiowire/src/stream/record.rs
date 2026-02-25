@@ -73,12 +73,7 @@ impl RecordWorker {
 
             let src = &buf[..read];
             if let Some((enc, tmp)) = &mut self.encoder {
-                // Should be infallible unless the encoder is misconfigured or we
-                // provide wrong number of samples to encode.
-                let cnt = src.len() / size_of::<u16>();
-                let len = enc
-                    .encode(convert_slice(src, cnt), tmp.as_mut_slice())
-                    .unwrap();
+                let len = enc.encode(convert_slice(src), tmp).unwrap();
                 buf.advance(buf.remaining());
                 buf.put_slice(&tmp[..len]);
             }
@@ -127,7 +122,7 @@ impl RecordProducer {
 
 pub fn handle_record<N, D>(
     log: &Logger,
-    config: Config,
+    config: &Config,
     name: N,
     device: Option<D>,
     sock: Arc<UdpSocket>,
@@ -173,7 +168,7 @@ where
             rb,
             notify,
         };
-        StreamBuilder::new(config)
+        StreamBuilder::new(config.clone())
             .read_cb(move |src| producer.write(src))
             .error_cb(create_error_cb(log.clone()))
             .start(name, device)?

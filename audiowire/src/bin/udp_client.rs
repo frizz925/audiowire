@@ -12,7 +12,7 @@ use std::{
 use anyhow::{Ok as _Ok, Result};
 use audiowire::{
     HEARTBEAT_GRACE_PERIOD, HEARTBEAT_INTERVAL,
-    backend::config::Config,
+    backend::{config::Config, util::audio_check},
     command::{DeviceConfig, add_device_args},
     logging,
     packet::{
@@ -30,7 +30,7 @@ use audiowire::{
     stream::{Peer, handle_playback, handle_record},
 };
 use audiowire_serde::{Deserialize, Serialize};
-use bytes::Bytes;
+use bytes::{Buf, Bytes};
 use clap::{Arg, Command};
 use slog::{Logger, debug, error, info, o};
 use tokio::{
@@ -161,12 +161,17 @@ fn main() -> Result<ExitCode> {
         .next()
         .expect("Unable to resolve server address");
 
-    audiowire::initialize()?;
-
+    let device = DeviceConfig::from(&matches);
+    let config = Config::default();
     let log = logging::initialize();
-    let config = DeviceConfig::from(&matches);
+
+    audiowire::initialize()?;
+    info!(log, "Starting audio check");
+    audio_check(&log, &config, &device)?;
+    info!(log, "Audio check finished");
+
     let result = tokio::runtime::Runtime::new()?
-        .block_on(async move { run(log, config, addr, saddr).await });
+        .block_on(async move { run(log, config, device, addr, saddr).await });
 
     audiowire::terminate()?;
 
@@ -175,7 +180,8 @@ fn main() -> Result<ExitCode> {
 
 async fn run(
     log: Logger,
-    config: DeviceConfig,
+    config: Config,
+    device: DeviceConfig,
     name: String,
     saddr: SocketAddr,
 ) -> Result<ExitCode> {
@@ -185,9 +191,10 @@ async fn run(
         source_enabled,
         sink_enabled,
         opus_enabled,
-    } = config;
+    } = device;
     let mut sock = wrap_udp_owned(UdpSocket::bind(":::0").await?);
 
+    info!(log, "Initiating handshake with server"; "addr" => saddr);
     let org_timestamp = get_current_timestamp();
     let init: Handshake = HandshakeInit {
         flags: StreamFlags {
@@ -212,7 +219,7 @@ async fn run(
         error!(log, "We should get handshake reply here");
         return _Ok(ExitCode::FAILURE);
     };
-    let opus_enabled = config.opus_enabled && flags.opus_enabled;
+    let opus_enabled = device.opus_enabled && flags.opus_enabled;
 
     info!(
         log,
@@ -234,11 +241,11 @@ async fn run(
     sock.send_message_to(ack, &saddr).await?;
 
     let sock = Arc::new(sock.into_inner());
-    let record = if config.source_enabled && flags.sink_enabled {
+    let record = if device.source_enabled && flags.sink_enabled {
         let log = log.new(o!("stream" => "record"));
         let stream = handle_record(
             &log,
-            Config::default(),
+            &config,
             name.as_str(),
             source_name,
             Arc::clone(&sock),
@@ -248,22 +255,14 @@ async fn run(
             },
             opus_enabled,
         )?;
-        debug!(log, "Record running");
         Some(stream)
     } else {
         None
     };
 
-    let playback = if config.sink_enabled && flags.source_enabled {
+    let playback = if device.sink_enabled && flags.source_enabled {
         let log = log.new(o!("stream" => "playback"));
-        let stream = handle_playback(
-            &log,
-            Config::default(),
-            name.as_str(),
-            sink_name,
-            opus_enabled,
-        )?;
-        debug!(log, "Playback running");
+        let stream = handle_playback(&log, &config, name.as_str(), sink_name, opus_enabled)?;
         Some(stream)
     } else {
         None
@@ -302,6 +301,7 @@ async fn run(
             result = sock.raw_recv_from() => result?,
             _ = NOTIFY.notified() => break
         };
+        debug!(log, "Received data {} bytes", buf.remaining(); "addr" => addr);
         if let Err(e) = client.handle_packet(buf).await {
             error!(log, "Failed to handle packet"; "addr" => addr, "error" => e);
         }

@@ -8,16 +8,17 @@ use audiowire_sys::*;
 
 use super::{
     config::Config,
+    error::Error,
     result::{Result, parse_result_lazy},
 };
 
 pub trait ReadFn: FnMut(&[u8]) + 'static {}
 pub trait WriteFn: FnMut(&mut [u8]) + 'static {}
-pub trait ErrorFn: FnMut(i32, &str) + 'static {}
+pub trait ErrorFn: FnMut(Error) + 'static {}
 
 impl<F: FnMut(&[u8]) + 'static> ReadFn for F {}
 impl<F: FnMut(&mut [u8]) + 'static> WriteFn for F {}
-impl<F: FnMut(i32, &str) + 'static> ErrorFn for F {}
+impl<F: FnMut(Error) + 'static> ErrorFn for F {}
 
 type ReadCallback = Box<dyn ReadFn>;
 type WriteCallback = Box<dyn WriteFn>;
@@ -49,16 +50,8 @@ unsafe extern "C" fn on_write(buf: *mut c_char, len: usize, userdata: *mut c_voi
     callback!(userdata, write_cb(slice));
 }
 
-unsafe extern "C" fn on_error(err: c_int, message: *const c_char, userdata: *mut c_void) {
-    callback!(
-        userdata,
-        error_cb(
-            err as i32,
-            unsafe { CStr::from_ptr(message) }
-                .to_str()
-                .unwrap_or_default(),
-        )
-    );
+unsafe extern "C" fn on_error(code: c_int, message: *const c_char, userdata: *mut c_void) {
+    callback!(userdata, error_cb(Error::new(code, message)));
 }
 
 pub struct Stream {

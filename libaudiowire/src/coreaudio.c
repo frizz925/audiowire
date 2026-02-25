@@ -174,7 +174,7 @@ aw_result_t aw_start(aw_stream_t **s,
     OSStatus err = noErr;
 
     UInt32 propsize;
-    UInt32 samples = cfg.buffer_samples;
+    UInt32 frames = cfg.buffer_frames;
     for (int i = 0; i < PROPERTIES_COUNT; i++) {
         audio_properties_t *prop = &properties_list[i];
         if (!prop->enabled)
@@ -216,7 +216,7 @@ aw_result_t aw_start(aw_stream_t **s,
 
         // Set device buffer sample count
         address.mSelector = kAudioDevicePropertyBufferFrameSize;
-        CATCH_ERR(AudioObjectSetPropertyData(device_id, &address, 0, NULL, sizeof(samples), &samples));
+        CATCH_ERR(AudioObjectSetPropertyData(device_id, &address, 0, NULL, sizeof(frames), &frames));
     }
 
     // Set up buffer list
@@ -308,8 +308,8 @@ aw_result_t aw_start(aw_stream_t **s,
                                        kAudioUnitProperty_MaximumFramesPerSlice,
                                        prop->unit_scope_inverse,
                                        prop->unit_element,
-                                       &samples,
-                                       sizeof(samples)));
+                                       &frames,
+                                       sizeof(frames)));
 
         // Set audio unit callback
         AURenderCallbackStruct callback = {prop->callback, stream};
