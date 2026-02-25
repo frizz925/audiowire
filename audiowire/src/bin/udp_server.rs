@@ -1,7 +1,7 @@
 use std::{
     collections::HashMap,
     net::{IpAddr, SocketAddr},
-    ops::Deref,
+    ops::{Deref, DerefMut},
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -121,9 +121,13 @@ impl Server {
         let Context { log, .. } = context;
         let IncomingClientData(stream_id, buf) = data;
         let log = log.new(o!("stream_id" => stream_id));
-        if let Some(client) = self.clients.read().await.get(&stream_id) {
+        if let Some(client) = self.clients.write().await.get_mut(&stream_id) {
             if let Client::Running(c) = client {
-                c.write(buf);
+                c.write(buf)
+                    .map_err(
+                        |e| error!(log, "Failed to decode Opus packet"; "error" => e.to_string()),
+                    )
+                    .ok();
             } else {
                 warn!(log, "Received data packet for client that is not running");
             }
@@ -147,7 +151,7 @@ impl Server {
             rec_timestamp,
         } = context;
         let HandshakeInit { flags } = init;
-        info!(log, "Got handshake init"; "stream_flags" => flags.raw());
+        info!(log, "Got handshake init"; "stream_flags" => flags);
 
         let stream_id = self.next_stream_id.fetch_add(1, Ordering::Acquire);
         let xmt_timestamp = {
@@ -165,9 +169,9 @@ impl Server {
         let msg: OutgoingMessage<_> = Handshake::from(HandshakeReply {
             stream_id,
             flags: StreamFlags {
-                source_enabled,
-                sink_enabled,
-                opus_enabled,
+                source_enabled: source_enabled && flags.sink_enabled,
+                sink_enabled: sink_enabled && flags.source_enabled,
+                opus_enabled: opus_enabled && flags.opus_enabled,
             },
             time: NetworkTime {
                 rec_timestamp,
@@ -219,6 +223,7 @@ impl Server {
             org_timestamp,
             ..
         } = hs;
+        let opus_enabled = self.config.opus_enabled && flags.opus_enabled;
 
         let record = if self.config.source_enabled && flags.sink_enabled {
             let log = log.new(o!("stream" => "record"));
@@ -230,6 +235,7 @@ impl Server {
                 Arc::clone(&self.sock),
                 addr.to_owned(),
                 move |src, dst| OutgoingMessage::from(OutgoingServerData(src)).serialize(dst),
+                opus_enabled,
             )?;
             Some(stream)
         } else {
@@ -243,6 +249,7 @@ impl Server {
                 Config::default(),
                 addr.to_string(),
                 self.config.sink_name.as_deref(),
+                opus_enabled,
             )?;
             Some(stream)
         } else {
@@ -295,6 +302,12 @@ impl Deref for ClientRunning {
 
     fn deref(&self) -> &Self::Target {
         &self.inner
+    }
+}
+
+impl DerefMut for ClientRunning {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.inner
     }
 }
 

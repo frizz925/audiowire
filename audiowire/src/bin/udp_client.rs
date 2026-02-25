@@ -1,5 +1,6 @@
 use std::{
     net::{SocketAddr, ToSocketAddrs},
+    ops::{Deref, DerefMut},
     process::ExitCode,
     sync::{
         Arc,
@@ -44,12 +45,11 @@ static NOTIFY: Notify = Notify::const_new();
 struct Client {
     inner: Peer,
     log: Logger,
-
-    last_heartbeat: RwLock<Instant>,
+    last_heartbeat: Arc<RwLock<Instant>>,
 }
 
 impl Client {
-    async fn handle_packet(&self, mut buf: Bytes) -> Result<()> {
+    async fn handle_packet(&mut self, mut buf: Bytes) -> Result<()> {
         match IncomingMessage::deserialize(&mut buf)? {
             IncomingMessage::Data(mut buf) => {
                 let data = IncomingServerData::deserialize(&mut buf)?;
@@ -72,23 +72,33 @@ impl Client {
         Ok(())
     }
 
-    fn handle_data(&self, data: IncomingServerData<Bytes>) {
-        self.as_ref().write(data.0);
+    fn handle_data(&mut self, data: IncomingServerData<Bytes>) {
+        self.write(data.0)
+            .map_err(|e| error!(self.log, "Failed to decode Opus packet"; "error" => e.to_string()))
+            .ok();
     }
 }
 
-impl AsRef<Peer> for Client {
-    fn as_ref(&self) -> &Peer {
+impl Deref for Client {
+    type Target = Peer;
+
+    fn deref(&self) -> &Self::Target {
         &self.inner
+    }
+}
+
+impl DerefMut for Client {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.inner
     }
 }
 
 struct HeartbeatWorker {
     log: Logger,
-    client: Arc<Client>,
     stream_id: StreamId,
     sock: Arc<UdpSocket>,
     addr: SocketAddr,
+    last_heartbeat: Arc<RwLock<Instant>>,
 }
 
 impl HeartbeatWorker {
@@ -107,7 +117,7 @@ impl HeartbeatWorker {
             _ = sleep(HEARTBEAT_INTERVAL) => (),
             _ = NOTIFY.notified() => return false
         }
-        let elapsed = self.client.last_heartbeat.read().await.elapsed();
+        let elapsed = self.last_heartbeat.read().await.elapsed();
         if elapsed > HEARTBEAT_GRACE_PERIOD {
             info!(self.log, "Closing due to server inactivity");
             stop();
@@ -202,12 +212,13 @@ async fn run(
         error!(log, "We should get handshake reply here");
         return _Ok(ExitCode::FAILURE);
     };
+    let opus_enabled = config.opus_enabled && flags.opus_enabled;
 
     info!(
         log,
         "Got handshake reply";
         "stream_id" => stream_id,
-        "stream_flags" => flags.raw(),
+        "stream_flags" => flags,
         "rec_timestamp" => time.rec_timestamp,
         "xmt_timestamp" => time.xmt_timestamp
     );
@@ -235,6 +246,7 @@ async fn run(
             move |src, dst| {
                 OutgoingMessage::from(OutgoingClientData(stream_id, src)).serialize(dst)
             },
+            opus_enabled,
         )?;
         debug!(log, "Record running");
         Some(stream)
@@ -244,19 +256,25 @@ async fn run(
 
     let playback = if config.sink_enabled && flags.source_enabled {
         let log = log.new(o!("stream" => "playback"));
-        let stream = handle_playback(&log, Config::default(), name.as_str(), sink_name)?;
+        let stream = handle_playback(
+            &log,
+            Config::default(),
+            name.as_str(),
+            sink_name,
+            opus_enabled,
+        )?;
         debug!(log, "Playback running");
         Some(stream)
     } else {
         None
     };
 
-    let client = Arc::new(Client {
+    let last_heartbeat = Arc::new(RwLock::new(Instant::now()));
+    let mut client = Client {
         inner: Peer::new(record, playback, &time, org_timestamp, rec_timestamp),
         log: log.clone(),
-
-        last_heartbeat: RwLock::new(Instant::now()),
-    });
+        last_heartbeat: Arc::clone(&last_heartbeat),
+    };
     let mut handles = Vec::new();
 
     // Cancel handler
@@ -268,11 +286,11 @@ async fn run(
     // Heartbeat monitor
     handles.push({
         let worker = HeartbeatWorker {
-            client: Arc::clone(&client),
             log: log.new(o!("worker" => "heartbeat")),
             stream_id,
             sock: Arc::clone(&sock),
             addr,
+            last_heartbeat,
         };
         tokio::spawn(worker.run())
     });

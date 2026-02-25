@@ -13,3 +13,7 @@ impl ChannelsParser for Channels {
         }
     }
 }
+
+pub fn convert_slice<'a, S, T>(slice: &'a [S], len: usize) -> &'a [T] {
+    unsafe { std::slice::from_raw_parts(slice.as_ptr() as *const T, len) }
+}

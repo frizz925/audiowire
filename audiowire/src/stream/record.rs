@@ -1,6 +1,6 @@
 use std::{net::SocketAddr, sync::Arc};
 
-use bytes::{BufMut, BytesMut};
+use bytes::{Buf, BufMut, BytesMut};
 use slog::{Logger, debug, error, info, warn};
 use tokio::{net::UdpSocket, sync::Notify, task::JoinHandle};
 
@@ -10,6 +10,7 @@ use crate::{
         result::Result,
         stream::{Stream, StreamBuilder},
     },
+    opus::{ChannelsParser, convert_slice},
     ringbuf::RingBuf,
     stream::error::create_error_cb,
 };
@@ -41,49 +42,52 @@ struct RecordWorker {
     log: Logger,
     config: Config,
 
-    rb: RingBuf<u8>,
+    rb: Arc<RingBuf<u8>>,
     sock: Arc<UdpSocket>,
     addr: SocketAddr,
+    encoder: Option<(opus::Encoder, Vec<u8>)>,
 
-    data_notify: Notify,
+    data_notify: Arc<Notify>,
     cancel_notify: Arc<Notify>,
 }
 
 impl RecordWorker {
-    fn write(&self, src: &[u8]) {
-        let mut dst = self.rb.write_chunks();
-        if dst.available() >= src.len() {
-            dst.write(src);
-            self.data_notify.notify_one();
-        } else {
-            warn!(
-                self.log, "Buffer underflow!";
-                "requested" => src.len(),
-                "available" => dst.available()
-            );
-        }
-    }
-
-    async fn run(&self, serialize: impl SerializeFn<BytesMut>) {
-        let Self { config, rb, .. } = self;
+    async fn run(mut self, serialize: impl SerializeFn<BytesMut>) {
         let mut buf = BytesMut::with_capacity(65536);
-        let bufsize = config.buffer_size();
         loop {
             tokio::select! {
                 _ = self.data_notify.notified() => (),
                 _ = self.cancel_notify.notified() => break
             }
-            let mut src = rb.read_chunks();
-            while src.remaining() >= bufsize {
-                buf.put_bytes(0, bufsize);
-                src.read(&mut buf);
+            self.read(&mut buf, &serialize).await;
+        }
+    }
 
-                let src = buf.split();
-                serialize(&src, &mut buf);
-                self.send(&buf).await;
-                buf.unsplit(src);
-                buf.clear();
+    async fn read(&mut self, buf: &mut BytesMut, serialize: impl SerializeFn<BytesMut>) {
+        let bufsize = self.config.buffer_size();
+        let mut src = self.rb.read_chunks();
+        while src.remaining() >= bufsize {
+            buf.clear();
+            buf.put_bytes(0, bufsize);
+            let read = src.read(buf);
+
+            let src = &buf[..read];
+            if let Some((enc, tmp)) = &mut self.encoder {
+                // Should be infallible unless the encoder is misconfigured or we
+                // provide wrong number of samples to encode.
+                let cnt = src.len() / size_of::<u16>();
+                let len = enc
+                    .encode(convert_slice(src, cnt), tmp.as_mut_slice())
+                    .unwrap();
+                buf.advance(buf.remaining());
+                buf.put_slice(&tmp[..len]);
             }
+
+            let src = buf.split();
+            serialize(&src, buf);
+            self.send(&buf).await;
+            buf.advance(buf.len());
+            buf.unsplit(src);
         }
     }
 
@@ -91,6 +95,32 @@ impl RecordWorker {
         match self.sock.send_to(buf, self.addr).await {
             Ok(send) => debug!(self.log, "Sent data {send} bytes"),
             Err(e) => error!(self.log, "Failed to send packet"; "error" => e),
+        }
+    }
+}
+
+unsafe impl Sync for RecordWorker {}
+unsafe impl Send for RecordWorker {}
+
+struct RecordProducer {
+    log: Logger,
+    rb: Arc<RingBuf<u8>>,
+    notify: Arc<Notify>,
+}
+
+impl RecordProducer {
+    fn write(&self, src: &[u8]) {
+        let Self { log, rb, notify } = self;
+        let mut dst = rb.write_chunks();
+        if dst.available() >= src.len() {
+            dst.write(src);
+            notify.notify_one();
+        } else {
+            warn!(
+                log, "Buffer underflow!";
+                "requested" => src.len(),
+                "available" => dst.available()
+            );
         }
     }
 }
@@ -103,27 +133,48 @@ pub fn handle_record<N, D>(
     sock: Arc<UdpSocket>,
     addr: SocketAddr,
     serialize: impl SerializeFn<BytesMut> + Send + Sync + 'static,
+    opus_enabled: bool,
 ) -> Result<RecordStream>
 where
     N: Into<Vec<u8>>,
     D: Into<Vec<u8>>,
 {
-    let worker = Arc::new(RecordWorker {
+    let encoder = if opus_enabled {
+        let enc = opus::Encoder::new(
+            config.sample_rate,
+            opus::Channels::from_u8(config.channels),
+            opus::Application::LowDelay,
+        )
+        .unwrap();
+        let buf = vec![0u8; 65536];
+        Some((enc, buf))
+    } else {
+        None
+    };
+
+    let rb = Arc::new(RingBuf::new(config.max_buffer_size()));
+    let notify = Arc::new(Notify::new());
+    let worker = RecordWorker {
         log: log.clone(),
         config: config.clone(),
 
-        rb: RingBuf::new(config.max_buffer_size()),
+        rb: Arc::clone(&rb),
         sock,
         addr,
+        encoder,
 
-        data_notify: Notify::new(),
+        data_notify: Arc::clone(&notify),
         cancel_notify: Arc::new(Notify::new()),
-    });
+    };
 
     let stream = {
-        let worker = Arc::clone(&worker);
+        let producer = RecordProducer {
+            log: log.clone(),
+            rb,
+            notify,
+        };
         StreamBuilder::new(config)
-            .read_cb(move |src| worker.write(src))
+            .read_cb(move |src| producer.write(src))
             .error_cb(create_error_cb(log.clone()))
             .start(name, device)?
     };

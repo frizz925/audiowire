@@ -1,4 +1,4 @@
-use std::sync::atomic::AtomicU8;
+use std::{fmt::Display, sync::atomic::AtomicU8};
 
 use audiowire_serde::{Deserialize, Serialize};
 use bytes::{Buf, BufMut, TryGetError};
@@ -7,6 +7,7 @@ pub type StreamId = u8;
 
 pub type AtomicStreamId = AtomicU8;
 
+#[derive(Clone, Copy, Debug)]
 pub struct StreamFlags {
     pub source_enabled: bool,
     pub sink_enabled: bool,
@@ -17,6 +18,27 @@ impl StreamFlags {
     const SOURCE: u8 = 0b0001;
     const SINK: u8 = 0b0010;
     const OPUS: u8 = 0b0100;
+}
+
+impl slog::Value for StreamFlags {
+    fn serialize(
+        &self,
+        _rec: &slog::Record<'_>,
+        key: slog::Key,
+        serializer: &mut dyn slog::Serializer,
+    ) -> slog::Result {
+        serializer.emit_str(key, self.to_string().as_str())
+    }
+}
+
+impl Display for StreamFlags {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "StreamFlags(source={} sink={} opus={})",
+            self.source_enabled, self.sink_enabled, self.opus_enabled
+        )
+    }
 }
 
 impl Serialize for StreamFlags {

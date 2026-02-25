@@ -31,9 +31,10 @@ impl Peer {
         }
     }
 
-    pub fn write(&self, mut buf: Bytes) {
-        if let Some(playback) = self.playback.as_ref() {
-            playback.write(&mut buf);
+    pub fn write(&mut self, mut buf: Bytes) -> opus::Result<()> {
+        if let Some(playback) = self.playback.as_mut() {
+            playback.write(&mut buf)?;
         }
+        Ok(())
     }
 }
