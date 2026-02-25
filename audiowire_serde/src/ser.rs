@@ -1,53 +1,67 @@
-use bytes::{Buf, BufMut, Bytes};
+use std::io::{Result, Write};
 
 pub trait Serialize {
-    fn serialize(&self, buf: &mut impl BufMut);
+    fn serialize<W: Write>(&self, writer: W) -> Result<()>;
 }
 
-macro_rules! serialize_primitives {
-    (
+macro_rules! serialize_nums {
+    ($($int:ty),+) => {
         $(
-            ($type:ty, $method:tt),
-        )+
-    ) => {
-        $(
-            impl Serialize for $type {
-                fn serialize(&self, buf: &mut impl BufMut) {
-                    buf.$method(*self);
+            impl Serialize for $int {
+                fn serialize<W: Write>(&self, mut writer: W) -> Result<()> {
+                    let buf = self.to_be_bytes();
+                    writer.write_all(&buf)
                 }
             }
         )+
     };
 }
 
-serialize_primitives! {
-    (u8, put_u8),
-    (u16, put_u16),
-    (u32, put_u32),
-    (u64, put_u64),
+serialize_nums!(u8, u16, u32, u64, u128, i8, i16, i32, i64, i128, f32, f64);
 
-    (i8, put_i8),
-    (i16, put_i16),
-    (i32, put_i32),
-    (i64, put_i64),
-}
-
-impl Serialize for usize {
-    fn serialize(&self, buf: &mut impl BufMut) {
-        buf.put_u16(*self as u16);
+impl Serialize for bool {
+    fn serialize<W: Write>(&self, writer: W) -> Result<()> {
+        let value = if *self { 1 } else { 0 };
+        value.serialize(writer)
     }
 }
 
-impl Serialize for Bytes {
-    fn serialize(&self, buf: &mut impl BufMut) {
-        self.remaining().serialize(buf);
-        buf.put_slice(self);
+impl Serialize for usize {
+    fn serialize<W: Write>(&self, writer: W) -> Result<()> {
+        (*self as u16).serialize(writer)
+    }
+}
+
+impl Serialize for [u8] {
+    fn serialize<W: Write>(&self, mut writer: W) -> Result<()> {
+        self.len().serialize(&mut writer)?;
+        writer.write_all(self)?;
+        Ok(())
     }
 }
 
 impl Serialize for &[u8] {
-    fn serialize(&self, buf: &mut impl BufMut) {
-        self.len().serialize(buf);
-        buf.put_slice(*self);
+    fn serialize<W: Write>(&self, mut writer: W) -> Result<()> {
+        self.len().serialize(&mut writer)?;
+        writer.write_all(*self)?;
+        Ok(())
+    }
+}
+
+impl Serialize for Vec<u8> {
+    fn serialize<W: Write>(&self, writer: W) -> Result<()> {
+        self.as_slice().serialize(writer)
+    }
+}
+
+impl Serialize for String {
+    fn serialize<W: Write>(&self, writer: W) -> Result<()> {
+        self.as_bytes().serialize(writer)
+    }
+}
+
+impl Serialize for str {
+    fn serialize<W: Write>(&self, writer: W) -> Result<()> {
+        self.as_bytes().serialize(writer)
     }
 }

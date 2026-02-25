@@ -1,54 +1,57 @@
-use bytes::{Buf, Bytes, TryGetError};
+use std::io::{Read, Result};
 
 pub trait Deserialize: Sized {
-    fn deserialize(buf: &mut impl Buf) -> Result<Self, TryGetError>;
+    fn deserialize<R: Read>(reader: R) -> Result<Self>;
 }
 
-macro_rules! deserialize_primitives {
-    (
+macro_rules! deserialize_ints {
+    ($(($int:ident, $size:literal),)+) => {
         $(
-            ($type:ty, $method:tt),
-        )+
-    ) => {
-        $(
-            impl Deserialize for $type {
-                fn deserialize(buf: &mut impl Buf) -> Result<Self, TryGetError> {
-                    buf.$method()
+            impl Deserialize for $int {
+                fn deserialize<R: Read>(mut reader: R) -> Result<Self> {
+                    let mut buf = [0u8; $size];
+                    reader.read_exact(&mut buf)?;
+                    Ok(Self::from_be_bytes(buf))
                 }
             }
         )+
     };
 }
 
-deserialize_primitives! {
-    (u8, try_get_u8),
-    (u16, try_get_u16),
-    (u32, try_get_u32),
-    (u64, try_get_u64),
+deserialize_ints! {
+    (u8, 1),
+    (u16, 2),
+    (u32, 4),
+    (u64, 8),
+    (u128, 16),
 
-    (i8, try_get_i8),
-    (i16, try_get_i16),
-    (i32, try_get_i32),
-    (i64, try_get_i64),
+    (i8, 1),
+    (i16, 2),
+    (i32, 4),
+    (i64, 8),
+    (i128, 16),
+
+    (f32, 4),
+    (f64, 8),
 }
 
-impl Deserialize for usize {
-    fn deserialize(buf: &mut impl Buf) -> Result<Self, TryGetError> {
-        Ok(buf.try_get_u16()? as usize)
+impl Deserialize for bool {
+    fn deserialize<R: Read>(reader: R) -> Result<Self> {
+        u8::deserialize(reader).map(|v| v != 0)
     }
 }
 
-impl Deserialize for Bytes {
-    fn deserialize(buf: &mut impl Buf) -> Result<Self, TryGetError> {
-        let requested = usize::deserialize(buf)?;
-        let available = buf.remaining();
-        if available >= requested {
-            Ok(buf.copy_to_bytes(requested))
-        } else {
-            Err(TryGetError {
-                available,
-                requested,
-            })
-        }
+impl Deserialize for usize {
+    fn deserialize<R: Read>(reader: R) -> Result<Self> {
+        u16::deserialize(reader).map(|v| v as usize)
+    }
+}
+
+impl Deserialize for Vec<u8> {
+    fn deserialize<R: Read>(mut reader: R) -> Result<Self> {
+        let len = usize::deserialize(&mut reader)?;
+        let mut vec = vec![0u8; len];
+        reader.read_exact(&mut vec)?;
+        Ok(vec)
     }
 }

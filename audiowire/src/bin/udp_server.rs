@@ -1,12 +1,15 @@
 use std::{
     collections::HashMap,
-    net::{IpAddr, SocketAddr},
+    io::{ErrorKind, Read},
+    net::{IpAddr, SocketAddr, ToSocketAddrs, UdpSocket},
     ops::{Deref, DerefMut},
+    process::ExitCode,
     sync::{
-        Arc,
+        Arc, Condvar, Mutex, RwLock,
         atomic::{AtomicBool, Ordering},
     },
-    time::Instant,
+    thread,
+    time::{Duration, Instant},
 };
 
 use anyhow::{Ok as _Ok, Result};
@@ -30,17 +33,11 @@ use audiowire::{
     stream::{Peer, handle_playback, handle_record},
 };
 use audiowire_serde::{Deserialize, Serialize};
-use bytes::{Buf, Bytes};
 use clap::{Arg, Command, value_parser};
 use slog::{Logger, debug, error, info, o, warn};
-use tokio::{
-    net::{ToSocketAddrs, UdpSocket},
-    sync::{Notify, RwLock},
-    time::sleep,
-};
 
+static NOTIFY: (Mutex<bool>, Condvar) = (Mutex::new(true), Condvar::new());
 static RUNNING: AtomicBool = AtomicBool::new(true);
-static NOTIFY: Notify = Notify::const_new();
 
 struct Context<'a> {
     log: &'a Logger,
@@ -69,48 +66,49 @@ impl Server {
         }
     }
 
-    async fn handle_packet<'a>(&self, context: Context<'a>, mut buf: impl Buf) -> Result<()> {
-        let message = IncomingMessage::deserialize(&mut buf)?;
+    fn handle_packet<'a, R: Read>(&self, context: Context<'a>, reader: R) -> Result<()> {
+        let message = IncomingMessage::deserialize(reader)?;
         match message {
             IncomingMessage::Handshake(hs) => {
-                self.handle_handshake(context, hs).await?;
+                self.handle_handshake(context, hs)?;
             }
             IncomingMessage::ClientCommand(cmd) => {
-                self.handle_command(context, cmd).await?;
+                self.handle_command(context, cmd)?;
             }
-            IncomingMessage::Data(mut buf) => {
-                let data = IncomingClientData::deserialize(&mut buf)?;
-                self.handle_data(context, data).await;
+            IncomingMessage::Data(reader) => {
+                let data = IncomingClientData::deserialize(reader)?;
+                self.handle_data(context, data);
             }
             _ => (),
         }
         Ok(())
     }
 
-    async fn handle_handshake<'a>(&self, context: Context<'a>, hs: Handshake) -> Result<()> {
+    fn handle_handshake<'a>(&self, context: Context<'a>, hs: Handshake) -> Result<()> {
         match hs {
             Handshake::Init(init) => {
-                self.handle_handshake_init(context, init).await?;
+                self.handle_handshake_init(context, init)?;
             }
             Handshake::Ack(ack) => {
-                self.handle_handshake_ack(context, ack).await?;
+                self.handle_handshake_ack(context, ack)?;
             }
             _ => (),
         }
         Ok(())
     }
 
-    async fn handle_command<'a>(&self, context: Context<'a>, cmd: ClientCommand) -> Result<()> {
+    fn handle_command<'a>(&self, context: Context<'a>, cmd: ClientCommand) -> Result<()> {
         let Context { log, .. } = context;
         match cmd {
             ClientCommand::Heartbeat(ClientHeartbeat(stream_id)) => {
-                if let Some(Client::Running(c)) = self.clients.write().await.get_mut(&stream_id) {
+                if let Some(Client::Running(c)) = self.clients.write().unwrap().get_mut(&stream_id)
+                {
                     info!(log, "Received client heartbeat"; "stream_id" => stream_id);
                     c.last_heartbeat = Instant::now();
                 }
             }
             ClientCommand::Close(ClientClose(stream_id)) => {
-                if let Some(_) = self.clients.write().await.remove(&stream_id) {
+                if let Some(_) = self.clients.write().unwrap().remove(&stream_id) {
                     info!(log, "Client closed"; "stream_id" => stream_id);
                 }
             }
@@ -119,13 +117,13 @@ impl Server {
         Ok(())
     }
 
-    async fn handle_data<'a>(&self, context: Context<'a>, data: IncomingClientData<Bytes>) {
+    fn handle_data<'a>(&self, context: Context<'a>, data: IncomingClientData<Vec<u8>>) {
         let Context { log, .. } = context;
         let IncomingClientData(stream_id, buf) = data;
         let log = log.new(o!("stream_id" => stream_id));
-        if let Some(client) = self.clients.write().await.get_mut(&stream_id) {
+        if let Some(client) = self.clients.write().unwrap().get_mut(&stream_id) {
             if let Client::Running(c) = client {
-                c.write(buf)
+                c.write(&buf)
                     .map_err(
                         |e| error!(log, "Failed to decode Opus packet"; "error" => e.to_string()),
                     )
@@ -136,11 +134,7 @@ impl Server {
         }
     }
 
-    async fn handle_handshake_init<'a>(
-        &self,
-        context: Context<'a>,
-        init: HandshakeInit,
-    ) -> Result<()> {
+    fn handle_handshake_init<'a>(&self, context: Context<'a>, init: HandshakeInit) -> Result<()> {
         let DeviceConfig {
             source_enabled,
             sink_enabled,
@@ -164,7 +158,7 @@ impl Server {
                 last_handshake: Instant::now(),
             }
             .into();
-            self.clients.write().await.insert(stream_id, client);
+            self.clients.write().unwrap().insert(stream_id, client);
             org_timestamp
         };
 
@@ -181,15 +175,11 @@ impl Server {
             },
         })
         .into();
-        self.sock.send_to(msg.into_bytes().as_ref(), addr).await?;
+        self.sock.send_to(msg.into_bytes().as_ref(), addr)?;
         Ok(())
     }
 
-    async fn handle_handshake_ack<'a>(
-        &self,
-        context: Context<'a>,
-        ack: HandshakeAck,
-    ) -> Result<()> {
+    fn handle_handshake_ack<'a>(&self, context: Context<'a>, ack: HandshakeAck) -> Result<()> {
         let Context {
             log,
             addr,
@@ -203,7 +193,7 @@ impl Server {
             "xmt_timestamp" => time.xmt_timestamp
         );
 
-        let client = self.clients.write().await.remove(&stream_id);
+        let client = self.clients.write().unwrap().remove(&stream_id);
         let hs = if let Some(client) = client {
             match client {
                 Client::Handshake(hs) => hs,
@@ -264,7 +254,7 @@ impl Server {
             last_heartbeat: Instant::now(),
         }
         .into();
-        self.clients.write().await.insert(stream_id, client);
+        self.clients.write().unwrap().insert(stream_id, client);
 
         Ok(())
     }
@@ -319,30 +309,27 @@ struct HeartbeatWorker {
 }
 
 impl HeartbeatWorker {
-    async fn run(self) {
+    fn run(self) {
         let mut sock = wrap_udp(&self.server.sock);
-        while RUNNING.load(Ordering::Relaxed) {
-            let sock = sock.enter();
-            tokio::select! {
-                _ = sleep(HEARTBEAT_INTERVAL) => (),
-                _ = NOTIFY.notified() => break
-            }
-            self.check(sock).await;
+        let (lock, cvar) = &NOTIFY;
+        let mut running = lock.lock().unwrap();
+        while *running {
+            let (update, _) = cvar
+                .wait_timeout_while(running, HEARTBEAT_INTERVAL, |val| *val && is_running())
+                .unwrap();
+            running = update;
+            self.check(&mut sock);
         }
     }
 
-    async fn check<U, S>(&self, mut sock: S)
-    where
-        U: UdpWrapper,
-        S: AsMut<U>,
-    {
+    fn check<S: UdpWrapper>(&self, sock: &mut S) {
         let dead = {
             let mut stream_ids = Vec::new();
-            for (stream_id, client) in self.server.clients.read().await.iter() {
+            for (stream_id, client) in self.server.clients.read().unwrap().iter() {
                 let last_instant = match client {
                     Client::Handshake(c) => c.last_handshake,
                     Client::Running(c) => {
-                        self.pulse(&mut sock, c.addr, *stream_id).await;
+                        self.pulse(sock, c.addr, *stream_id);
                         c.last_heartbeat
                     }
                 };
@@ -353,7 +340,7 @@ impl HeartbeatWorker {
             stream_ids
         };
         if dead.len() > 0 {
-            let mut clients = self.server.clients.write().await;
+            let mut clients = self.server.clients.write().unwrap();
             for stream_id in dead {
                 clients.remove(&stream_id);
                 info!(
@@ -364,15 +351,12 @@ impl HeartbeatWorker {
         }
     }
 
-    async fn pulse<U, S, A>(&self, mut sock: S, addr: A, stream_id: StreamId)
+    fn pulse<S, A>(&self, sock: &mut S, addr: A, stream_id: StreamId)
     where
-        U: UdpWrapper,
-        S: AsMut<U>,
+        S: UdpWrapper,
         A: ToSocketAddrs,
     {
-        sock.as_mut()
-            .send_message_to(SERVER_HEARTBEAT, addr)
-            .await
+        sock.send_message_to(SERVER_HEARTBEAT, addr)
             .map_err(|e| {
                 error!(
                     self.log, "Failed to send heartbeat";
@@ -405,7 +389,7 @@ fn cmd() -> Command {
     add_device_args(cmd)
 }
 
-fn main() -> Result<()> {
+fn main() -> Result<ExitCode> {
     let matches = cmd().get_matches();
     let host = matches.get_one("host").map(IpAddr::to_owned).unwrap();
     let port = matches.get_one("port").map(u16::to_owned).unwrap();
@@ -420,66 +404,80 @@ fn main() -> Result<()> {
     audio_check(&log, &config, &device)?;
     info!(log, "Audio check finished");
 
-    let result = tokio::runtime::Runtime::new()?
-        .block_on(async move { run(log, config, device, addr).await });
+    let result = run(log, config, device, addr);
 
     audiowire::terminate()?;
     result
 }
 
-async fn run(log: Logger, config: Config, device: DeviceConfig, addr: SocketAddr) -> Result<()> {
-    let sock = UdpSocket::bind(addr).await?;
+fn run(log: Logger, config: Config, device: DeviceConfig, addr: SocketAddr) -> Result<ExitCode> {
+    let sock = UdpSocket::bind(addr)?;
     info!(log, "Server listening at {}", addr.to_string());
+    sock.set_nonblocking(true)?;
+
+    // Signal handler
+    ctrlc::set_handler(|| {
+        RUNNING.store(false, Ordering::Relaxed);
+        let (lock, cvar) = &NOTIFY;
+        let mut running = lock.lock().unwrap();
+        *running = false;
+        cvar.notify_all();
+    })
+    .unwrap();
 
     let server = Arc::new(Server::new(config, device, sock));
     let mut handles = Vec::new();
-
-    // Signal handler
-    handles.push(tokio::spawn(async move {
-        tokio::signal::ctrl_c().await.unwrap();
-        RUNNING.store(false, Ordering::Relaxed);
-        NOTIFY.notify_waiters();
-    }));
 
     // Heartbeat handler
     let worker = HeartbeatWorker {
         log: log.new(o!("worker" => "heartbeat")),
         server: Arc::clone(&server),
     };
-    handles.push(tokio::spawn(worker.run()));
+    handles.push(thread::spawn(|| worker.run()));
 
+    let mut exit_code = ExitCode::SUCCESS;
     let mut sock = wrap_udp(&server.sock);
-    while RUNNING.load(Ordering::Relaxed) {
-        let mut sock = sock.enter();
-        let (buf, addr) = tokio::select! {
-            result = sock.raw_recv_from() => result?,
-            _ = NOTIFY.notified() => break
+    while is_running() {
+        let (buf, addr) = match sock.raw_recv_from() {
+            Ok(value) => value,
+            Err(e) if e.kind() == ErrorKind::WouldBlock => {
+                thread::sleep(Duration::from_millis(100));
+                continue;
+            }
+            Err(e) => {
+                error!(log, "Socket recv_from returns error"; "error" => e);
+                exit_code = ExitCode::FAILURE;
+                break;
+            }
         };
-        debug!(log, "Received data {} bytes", buf.remaining(); "addr" => addr);
+        debug!(log, "Received data {} bytes", buf.len(); "addr" => addr);
         let rec_timestamp = get_current_timestamp();
 
-        let log = log.new(o!("addr" => addr.to_string()));
+        let log = log.new(o!("addr" => addr));
         let context = Context {
             log: &log,
             addr: &addr,
             rec_timestamp,
         };
-        if let Err(e) = server.handle_packet(context, buf).await {
+        if let Err(e) = server.handle_packet(context, buf) {
             error!(log, "Failed to handle packet"; "error" => e.to_string());
         }
     }
 
-    for client in server.clients.read().await.values() {
+    for client in server.clients.read().unwrap().values() {
         if let Client::Running(ClientRunning { addr, .. }) = client {
-            sock.send_message_to(SERVER_CLOSE, addr).await?;
+            sock.send_message_to(SERVER_CLOSE, addr)?;
         }
     }
     info!(log, "Server stopped listening");
 
     for handle in handles {
-        handle.abort();
-        handle.await.ok();
+        handle.join().unwrap();
     }
 
-    _Ok(())
+    _Ok(exit_code)
+}
+
+fn is_running() -> bool {
+    RUNNING.load(Ordering::Acquire)
 }

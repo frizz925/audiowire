@@ -1,7 +1,10 @@
-use std::{fmt::Display, sync::atomic::AtomicU8};
+use std::{
+    fmt::Display,
+    io::{Read, Result, Write},
+    sync::atomic::AtomicU8,
+};
 
 use audiowire_serde::{Deserialize, Serialize};
-use bytes::{Buf, BufMut, TryGetError};
 
 pub type StreamId = u8;
 
@@ -42,14 +45,14 @@ impl Display for StreamFlags {
 }
 
 impl Serialize for StreamFlags {
-    fn serialize(&self, buf: &mut impl BufMut) {
-        buf.put_u8(self.raw());
+    fn serialize<W: Write>(&self, writer: W) -> Result<()> {
+        self.raw().serialize(writer)
     }
 }
 
 impl Deserialize for StreamFlags {
-    fn deserialize(buf: &mut impl Buf) -> Result<Self, TryGetError> {
-        let flags = buf.try_get_u8()?;
+    fn deserialize<R: Read>(reader: R) -> Result<Self> {
+        let flags = u8::deserialize(reader)?;
         Ok(Self {
             source_enabled: flags & Self::SOURCE != 0,
             sink_enabled: flags & Self::SINK != 0,

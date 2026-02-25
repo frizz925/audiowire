@@ -1,7 +1,5 @@
 use std::time::Duration;
 
-use bytes::Bytes;
-
 use crate::packet::time::NetworkTime;
 
 use super::{playback::PlaybackStream, record::RecordStream};
@@ -31,9 +29,9 @@ impl Peer {
         }
     }
 
-    pub fn write(&mut self, mut buf: Bytes) -> opus::Result<()> {
+    pub fn write(&mut self, buf: &[u8]) -> opus::Result<()> {
         if let Some(playback) = self.playback.as_mut() {
-            playback.write(&mut buf)?;
+            playback.write(buf)?;
         }
         Ok(())
     }

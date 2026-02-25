@@ -1,41 +1,24 @@
+use audiowire_derive::Serialize;
 use audiowire_serde::{Deserialize, Serialize};
-use bytes::{BufMut, Bytes, BytesMut};
 
 use super::{command, handshake};
 
 pub const DATA_MESSAGE_CODE: u8 = 128;
 
-pub struct OutgoingMessage<T> {
+#[derive(Serialize)]
+pub struct OutgoingMessage<T: Serialize> {
     pub code: u8,
-    pub message: T,
+    pub payload: T,
 }
 
 impl<T: Serialize> OutgoingMessage<T> {
-    pub fn into_bytes(self) -> Bytes {
-        let mut buf = BytesMut::new();
-        self.serialize(&mut buf);
-        buf.freeze()
+    pub fn into_bytes(self) -> Vec<u8> {
+        let mut buf = Vec::new();
+        // Writing to Vec<u8> is infallible
+        self.serialize(&mut buf).unwrap();
+        buf
     }
 }
-
-impl<T: Serialize> Serialize for OutgoingMessage<T> {
-    fn serialize(&self, buf: &mut impl BufMut) {
-        buf.put_u8(self.code);
-        self.message.serialize(buf);
-    }
-}
-
-/*
-impl Deserialize for IncomingMessage {
-    fn deserialize(buf: &mut impl Buf) -> Result<Self, TryGetError> {
-        let message = match buf.try_get_u8()? {
-            10 => Self::Data(buf.copy_to_bytes(buf.remaining())),
-            code => Self::Unknown(code),
-        };
-        Ok(message)
-    }
-}
-*/
 
 macro_rules! message_types {
     (
@@ -44,15 +27,15 @@ macro_rules! message_types {
         )*
     ) => {
         #[non_exhaustive]
-        pub enum IncomingMessage {
+        pub enum IncomingMessage<R> {
             $(
                 $name($type),
             )*
-            Data(bytes::Bytes),
+            Data(R),
             Unknown(u8),
         }
 
-        impl IncomingMessage {
+        impl<R> IncomingMessage<R> {
             pub fn code(&self) -> u8 {
                 match self {
                     $(
@@ -64,13 +47,13 @@ macro_rules! message_types {
             }
         }
 
-        impl Deserialize for IncomingMessage {
-            fn deserialize(buf: &mut impl bytes::Buf) -> Result<Self, bytes::TryGetError> {
-                let message = match buf.try_get_u8()? {
+        impl<R: std::io::Read> IncomingMessage<R> {
+            pub fn deserialize(mut reader: R) -> std::io::Result<Self> {
+                let message = match u8::deserialize(&mut reader)? {
                     $(
-                        $code => Self::$name(<$type as Deserialize>::deserialize(buf)?),
+                        $code => Self::$name(<$type as Deserialize>::deserialize(&mut reader)?),
                     )*
-                    DATA_MESSAGE_CODE => Self::Data(buf.copy_to_bytes(buf.remaining())),
+                    DATA_MESSAGE_CODE => Self::Data(reader),
                     code => Self::Unknown(code),
                 };
                 Ok(message)
@@ -80,7 +63,7 @@ macro_rules! message_types {
         $(
             impl From<$type> for OutgoingMessage<$type> {
                 fn from(value: $type) -> Self {
-                    Self { code: $code, message: value }
+                    Self { code: $code, payload: value }
                 }
             }
         )*

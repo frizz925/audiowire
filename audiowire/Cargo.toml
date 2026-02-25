@@ -8,13 +8,12 @@ anyhow = { workspace = true, features = ["backtrace"] }
 audiowire_derive = { workspace = true }
 audiowire_sys = { workspace = true }
 audiowire_serde = { workspace = true }
-bytes = { workspace = true }
 chrono = { workspace = true }
 clap = "4.5"
 opus = "0.3"
-tokio = { workspace = true, features = ["rt-multi-thread", "net", "io-util", "time", "sync", "signal", "macros"] }
 slog = { version = "2.8.2", features = ["anyhow", "release_max_level_info"] }
 slog-term = "2.9.2"
+ctrlc = { version = "3.5.2", features = ["termination"] }
 
 [[bin]]
 name = "audiowire-udp-server"

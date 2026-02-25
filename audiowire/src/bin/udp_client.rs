@@ -1,12 +1,14 @@
 use std::{
-    net::{SocketAddr, ToSocketAddrs},
+    io::{Cursor, ErrorKind},
+    net::{SocketAddr, ToSocketAddrs, UdpSocket},
     ops::{Deref, DerefMut},
     process::ExitCode,
     sync::{
-        Arc,
+        Arc, Condvar, Mutex, RwLock,
         atomic::{AtomicBool, Ordering},
     },
-    time::Instant,
+    thread,
+    time::{Duration, Instant},
 };
 
 use anyhow::{Ok as _Ok, Result};
@@ -30,17 +32,11 @@ use audiowire::{
     stream::{Peer, handle_playback, handle_record},
 };
 use audiowire_serde::{Deserialize, Serialize};
-use bytes::{Buf, Bytes};
 use clap::{Arg, Command};
 use slog::{Logger, debug, error, info, o};
-use tokio::{
-    net::UdpSocket,
-    sync::{Notify, RwLock},
-    time::sleep,
-};
 
+static NOTIFY: (Mutex<bool>, Condvar) = (Mutex::new(true), Condvar::new());
 static RUNNING: AtomicBool = AtomicBool::new(true);
-static NOTIFY: Notify = Notify::const_new();
 
 struct Client {
     inner: Peer,
@@ -49,16 +45,16 @@ struct Client {
 }
 
 impl Client {
-    async fn handle_packet(&mut self, mut buf: Bytes) -> Result<()> {
+    fn handle_packet(&mut self, mut buf: &[u8]) -> Result<()> {
         match IncomingMessage::deserialize(&mut buf)? {
-            IncomingMessage::Data(mut buf) => {
-                let data = IncomingServerData::deserialize(&mut buf)?;
-                self.handle_data(data);
+            IncomingMessage::Data(buf) => {
+                let data = IncomingServerData::<Vec<u8>>::deserialize(Cursor::new(buf))?;
+                self.handle_data(&data.0);
             }
             IncomingMessage::ServerCommand(cmd) => match cmd {
                 ServerCommand::Heartbeat(_) => {
                     info!(self.log, "Received server heartbeat");
-                    let mut value = self.last_heartbeat.write().await;
+                    let mut value = self.last_heartbeat.write().unwrap();
                     *value = Instant::now();
                 }
                 ServerCommand::Close(_) => {
@@ -72,8 +68,8 @@ impl Client {
         Ok(())
     }
 
-    fn handle_data(&mut self, data: IncomingServerData<Bytes>) {
-        self.write(data.0)
+    fn handle_data(&mut self, data: &[u8]) {
+        self.write(data)
             .map_err(|e| error!(self.log, "Failed to decode Opus packet"; "error" => e.to_string()))
             .ok();
     }
@@ -102,22 +98,24 @@ struct HeartbeatWorker {
 }
 
 impl HeartbeatWorker {
-    async fn run(self) {
+    fn run(self) {
         let mut sock = wrap_udp(&self.sock);
-        while RUNNING.load(Ordering::Relaxed) {
-            if !self.check().await {
+        let (lock, cvar) = &NOTIFY;
+        let mut running = lock.lock().unwrap();
+        while *running {
+            let (update, _) = cvar
+                .wait_timeout_while(running, HEARTBEAT_INTERVAL, |val| *val && is_running())
+                .unwrap();
+            running = update;
+            if !self.check() {
                 break;
             }
-            self.pulse(sock.enter()).await;
+            self.pulse(&mut sock);
         }
     }
 
-    async fn check(&self) -> bool {
-        tokio::select! {
-            _ = sleep(HEARTBEAT_INTERVAL) => (),
-            _ = NOTIFY.notified() => return false
-        }
-        let elapsed = self.last_heartbeat.read().await.elapsed();
+    fn check(&self) -> bool {
+        let elapsed = self.last_heartbeat.read().unwrap().elapsed();
         if elapsed > HEARTBEAT_GRACE_PERIOD {
             info!(self.log, "Closing due to server inactivity");
             stop();
@@ -127,15 +125,9 @@ impl HeartbeatWorker {
         }
     }
 
-    async fn pulse<U, S>(&self, mut sock: S)
-    where
-        U: UdpWrapper,
-        S: AsMut<U>,
-    {
+    fn pulse<S: UdpWrapper>(&self, sock: &mut S) {
         let cmd: ClientCommand = ClientHeartbeat(self.stream_id).into();
-        sock.as_mut()
-            .send_message_to(cmd, self.addr)
-            .await
+        sock.send_message_to(cmd, self.addr)
             .map_err(|e| error!(self.log, "Failed to send heartbeat"; "error" => e))
             .ok();
     }
@@ -170,15 +162,13 @@ fn main() -> Result<ExitCode> {
     audio_check(&log, &config, &device)?;
     info!(log, "Audio check finished");
 
-    let result = tokio::runtime::Runtime::new()?
-        .block_on(async move { run(log, config, device, addr, saddr).await });
-
+    let result = run(log, config, device, addr, saddr);
     audiowire::terminate()?;
 
     result
 }
 
-async fn run(
+fn run(
     log: Logger,
     config: Config,
     device: DeviceConfig,
@@ -192,7 +182,7 @@ async fn run(
         sink_enabled,
         opus_enabled,
     } = device;
-    let mut sock = wrap_udp_owned(UdpSocket::bind(":::0").await?);
+    let mut sock = wrap_udp_owned(UdpSocket::bind(":::0")?);
 
     info!(log, "Initiating handshake with server"; "addr" => saddr);
     let org_timestamp = get_current_timestamp();
@@ -204,9 +194,9 @@ async fn run(
         },
     }
     .into();
-    sock.send_message_to(init, &saddr).await?;
+    sock.send_message_to(init, &saddr)?;
 
-    let (message, addr) = sock.recv_message_from().await?;
+    let (message, addr) = sock.recv_message_from()?;
     let rec_timestamp = get_current_timestamp();
 
     let HandshakeReply {
@@ -238,8 +228,9 @@ async fn run(
         },
     }
     .into();
-    sock.send_message_to(ack, &saddr).await?;
+    sock.send_message_to(ack, &saddr)?;
 
+    sock.set_nonblocking(true)?;
     let sock = Arc::new(sock.into_inner());
     let record = if device.source_enabled && flags.sink_enabled {
         let log = log.new(o!("stream" => "record"));
@@ -277,10 +268,7 @@ async fn run(
     let mut handles = Vec::new();
 
     // Cancel handler
-    handles.push(tokio::spawn(async move {
-        tokio::signal::ctrl_c().await.unwrap();
-        stop();
-    }));
+    ctrlc::set_handler(|| stop()).unwrap();
 
     // Heartbeat monitor
     handles.push({
@@ -291,33 +279,47 @@ async fn run(
             addr,
             last_heartbeat,
         };
-        tokio::spawn(worker.run())
+        thread::spawn(|| worker.run())
     });
 
+    let mut exit_code = ExitCode::SUCCESS;
     let mut sock = wrap_udp(sock);
-    while RUNNING.load(Ordering::Relaxed) {
-        let mut sock = sock.enter();
-        let (buf, addr) = tokio::select! {
-            result = sock.raw_recv_from() => result?,
-            _ = NOTIFY.notified() => break
+    while is_running() {
+        let (buf, addr) = match sock.raw_recv_from() {
+            Ok(value) => value,
+            Err(e) if e.kind() == ErrorKind::WouldBlock => {
+                thread::sleep(Duration::from_millis(100));
+                continue;
+            }
+            Err(e) => {
+                error!(log, "Socket recv_from returns error"; "error" => e);
+                exit_code = ExitCode::FAILURE;
+                break;
+            }
         };
-        debug!(log, "Received data {} bytes", buf.remaining(); "addr" => addr);
-        if let Err(e) = client.handle_packet(buf).await {
+        debug!(log, "Received data {} bytes", buf.len(); "addr" => addr);
+        if let Err(e) = client.handle_packet(buf) {
             error!(log, "Failed to handle packet"; "addr" => addr, "error" => e);
         }
     }
     let cmd: ClientCommand = ClientClose(stream_id).into();
-    sock.send_message_to(cmd, &addr).await?;
+    sock.send_message_to(cmd, &addr)?;
 
     for handle in handles {
-        handle.abort();
-        handle.await.ok();
+        handle.join().unwrap();
     }
 
-    Ok(ExitCode::SUCCESS)
+    Ok(exit_code)
+}
+
+fn is_running() -> bool {
+    RUNNING.load(Ordering::Relaxed)
 }
 
 fn stop() {
     RUNNING.store(false, Ordering::Relaxed);
-    NOTIFY.notify_waiters();
+    let (lock, cvar) = &NOTIFY;
+    let mut running = lock.lock().unwrap();
+    *running = false;
+    cvar.notify_all();
 }

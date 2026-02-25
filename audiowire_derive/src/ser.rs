@@ -8,10 +8,10 @@ pub fn expand_derive_serialize(input: DeriveInput) -> Result<TokenStream> {
     } = &input;
 
     let _self = Ident::new("self", ident.span());
-    let buf = Ident::new("buf", ident.span());
+    let writer = Ident::new("writer", ident.span());
     let body = match input.data {
-        Data::Struct(ref data) => serialize_body(&buf, &_self, data.fields.iter()),
-        Data::Union(ref data) => serialize_body(&buf, &_self, data.fields.named.iter()),
+        Data::Struct(ref data) => serialize_body(&writer, &_self, data.fields.iter()),
+        Data::Union(ref data) => serialize_body(&writer, &_self, data.fields.named.iter()),
         Data::Enum(_) => {
             return Err(Error::new(
                 ident.span(),
@@ -20,47 +20,48 @@ pub fn expand_derive_serialize(input: DeriveInput) -> Result<TokenStream> {
         }
     };
 
-    Ok(serialize_impl(ident, generics, buf, body))
+    Ok(serialize_impl(ident, generics, writer, body))
 }
 
 fn serialize_impl(
     ident: &Ident,
     generics: &Generics,
-    buf: Ident,
+    writer: Ident,
     body: TokenStream,
 ) -> TokenStream {
     let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
     quote! {
         #[automatically_derived]
         impl #impl_generics audiowire_serde::Serialize for #ident #ty_generics #where_clause {
-            fn serialize(&self, #buf: &mut impl bytes::BufMut) {
+            fn serialize<W: std::io::Write>(&self, mut #writer: W) -> std::io::Result<()> {
                 #body
+                Ok(())
             }
         }
     }
 }
 
 fn serialize_body<'a>(
-    buf: &Ident,
+    writer: &Ident,
     name: &Ident,
     fields: impl Iterator<Item = &'a Field>,
 ) -> TokenStream {
     let exprs = fields
         .enumerate()
-        .map(|(i, f)| serialize_buf(buf, name, f, i));
+        .map(|(i, f)| serialize_buf(writer, name, f, i));
     quote! {
         #(
-            #exprs;
+            #exprs?;
         )*
     }
 }
 
-fn serialize_buf(buf: &Ident, name: &Ident, field: &Field, index: usize) -> TokenStream {
+fn serialize_buf(writer: &Ident, name: &Ident, field: &Field, index: usize) -> TokenStream {
     let field = if let Some(ident) = field.ident.as_ref() {
         quote!(#name.#ident)
     } else {
         let index = Literal::usize_unsuffixed(index);
         quote!(#name.#index)
     };
-    quote!(audiowire_serde::Serialize::serialize(&#field, #buf))
+    quote!(#field.serialize(&mut #writer))
 }

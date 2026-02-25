@@ -1,3 +1,5 @@
+use std::io::Read;
+
 use audiowire_derive::{Deserialize, Serialize};
 use audiowire_serde::{Deserialize, Serialize};
 
@@ -27,7 +29,7 @@ macro_rules! outgoing_data {
                 fn from(value: $type) -> Self {
                     Self {
                         code: DATA_MESSAGE_CODE,
-                        message: value,
+                        payload: value,
                     }
                 }
             }
@@ -36,3 +38,11 @@ macro_rules! outgoing_data {
 }
 
 outgoing_data!(OutgoingClientData<T>, OutgoingServerData<T>);
+
+pub struct IncomingData<R: Read>(pub R);
+
+impl<R: Read> IncomingData<R> {
+    pub fn deserialize<T: Deserialize>(self) -> std::io::Result<T> {
+        T::deserialize(self.0)
+    }
+}

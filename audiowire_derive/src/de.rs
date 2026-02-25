@@ -7,13 +7,13 @@ pub fn expand_derive_deserialize(input: DeriveInput) -> Result<TokenStream> {
         ident, generics, ..
     } = &input;
 
-    let buf = Ident::new("buf", ident.span());
+    let reader = Ident::new("reader", ident.span());
     let body = match input.data {
         syn::Data::Struct(ref data) => {
             let named = matches!(data.fields, Fields::Named(_));
-            deserialize_fields(&buf, data.fields.iter(), named)
+            deserialize_fields(&reader, data.fields.iter(), named)
         }
-        syn::Data::Union(ref data) => deserialize_fields(&buf, data.fields.named.iter(), true),
+        syn::Data::Union(ref data) => deserialize_fields(&reader, data.fields.named.iter(), true),
         syn::Data::Enum(_) => {
             return Err(Error::new(
                 ident.span(),
@@ -22,20 +22,20 @@ pub fn expand_derive_deserialize(input: DeriveInput) -> Result<TokenStream> {
         }
     };
 
-    Ok(deserialize_impl(ident, generics, buf, body))
+    Ok(deserialize_impl(ident, generics, reader, body))
 }
 
 fn deserialize_impl<'a>(
     ident: &Ident,
     generics: &Generics,
-    buf: Ident,
+    reader: Ident,
     body: TokenStream,
 ) -> TokenStream {
     let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
     quote! {
         #[automatically_derived]
         impl #impl_generics audiowire_serde::Deserialize for #ident #ty_generics #where_clause {
-            fn deserialize(#buf: &mut impl bytes::Buf) -> Result<Self, bytes::TryGetError> {
+            fn deserialize<R: std::io::Read>(mut #reader: R) -> std::io::Result<Self> {
                 Ok(#body)
             }
         }
@@ -43,11 +43,11 @@ fn deserialize_impl<'a>(
 }
 
 fn deserialize_fields<'a>(
-    buf: &Ident,
+    reader: &Ident,
     fields: impl Iterator<Item = &'a Field>,
     named: bool,
 ) -> TokenStream {
-    let exprs: Vec<_> = fields.map(|f| deserialize_buf(buf, f)).collect();
+    let exprs: Vec<_> = fields.map(|f| deserialize_buf(reader, f)).collect();
     if exprs.is_empty() {
         quote!(Self)
     } else if named {
@@ -63,9 +63,9 @@ fn deserialize_fields<'a>(
     }
 }
 
-fn deserialize_buf(buf: &Ident, field: &Field) -> TokenStream {
+fn deserialize_buf(reader: &Ident, field: &Field) -> TokenStream {
     let ty = &field.ty;
-    let expr = quote!(<#ty as audiowire_serde::Deserialize>::deserialize(#buf));
+    let expr = quote!(<#ty as audiowire_serde::Deserialize>::deserialize(&mut #reader));
     if let Some(ident) = field.ident.as_ref() {
         quote!(#ident: #expr)
     } else {

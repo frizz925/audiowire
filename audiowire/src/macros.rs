@@ -3,7 +3,7 @@ macro_rules! message_enum {
     (
         $enum:ident;
         $(
-            $code:literal => ($name:ident, $struct:ty),
+            $code:literal => ($name:ident, $struct:ident),
         )+
     ) => {
         #[non_exhaustive]
@@ -26,24 +26,24 @@ macro_rules! message_enum {
         }
 
         impl audiowire_serde::Serialize for $enum {
-            fn serialize(&self, buf: &mut impl bytes::BufMut) {
-                buf.put_u8(self.code());
+            fn serialize<W: std::io::Write>(&self, mut writer: W) -> std::io::Result<()>
+            {
+                self.code().serialize(&mut writer)?;
                 match self {
                     $(
-                        Self::$name(v) => v.serialize(buf),
+                        Self::$name(v) => v.serialize(&mut writer),
                     )+
-                    Self::Unknown(_) => (),
+                    Self::Unknown(_) => Ok(()),
                 }
             }
         }
 
         impl audiowire_serde::Deserialize for $enum {
-            fn deserialize(buf: &mut impl bytes::Buf) -> Result<Self, bytes::TryGetError> {
-                let payload = match buf.try_get_u8()? {
+            fn deserialize<R: std::io::Read>(mut reader: R) -> std::io::Result<Self> {
+                let payload = match u8::deserialize(&mut reader)? {
                     $(
                         $code => {
-                            let v = audiowire_serde::Deserialize::deserialize(buf)?;
-                            Self::$name(v)
+                            Self::$name($struct::deserialize(&mut reader)?)
                         }
                     )+
                     code => Self::Unknown(code),

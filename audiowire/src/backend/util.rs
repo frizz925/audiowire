@@ -1,6 +1,5 @@
 use std::sync::{Arc, Condvar, Mutex, mpsc};
 
-use bytes::{Buf, Bytes, BytesMut};
 use slog::{Logger, info};
 
 use crate::{
@@ -57,11 +56,13 @@ pub fn audio_check(log: &Logger, config: &Config, device: &DeviceConfig) -> Resu
         );
         Some(stream)
     } else {
-        let src = BytesMut::zeroed(config.buffer_size());
+        let mut buf = [0u8; 65536];
+        let src = vec![0u8; config.buffer_size()];
         let buf = if let Some(mut enc) = encoder {
-            opus_encode(config, &mut enc, &src, &mut [0u8; 65536])
+            let len = opus_encode(config, &mut enc, &src, &mut buf);
+            buf[..len].to_vec()
         } else {
-            src.freeze()
+            src
         };
         data_tx.send(buf).unwrap();
         condvar_notify(&notify);
@@ -105,7 +106,7 @@ pub fn audio_check(log: &Logger, config: &Config, device: &DeviceConfig) -> Resu
 
 fn on_read(
     cfg: &Config,
-    tx: mpsc::SyncSender<Bytes>,
+    tx: mpsc::SyncSender<Vec<u8>>,
     mut encoder: Option<opus::Encoder>,
     notify: Notify,
 ) -> impl ReadFn {
@@ -113,9 +114,10 @@ fn on_read(
     let mut buf = [0u8; 65536];
     move |src| {
         let buf = if let Some(enc) = &mut encoder {
-            opus_encode(&cfg, enc, src, &mut buf)
+            let len = opus_encode(&cfg, enc, src, &mut buf);
+            buf[..len].to_vec()
         } else {
-            Bytes::copy_from_slice(src)
+            src.to_vec()
         };
         tx.send(buf).ok();
         condvar_notify(&notify);
@@ -124,13 +126,13 @@ fn on_read(
 
 fn on_write(
     cfg: &Config,
-    rx: mpsc::Receiver<Bytes>,
+    rx: mpsc::Receiver<Vec<u8>>,
     mut decoder: Option<opus::Decoder>,
     notify: Notify,
 ) -> impl WriteFn {
     let cfg = cfg.to_owned();
     move |dst| {
-        let mut src = if let Ok(buf) = rx.recv() {
+        let src = if let Ok(buf) = rx.recv() {
             buf
         } else {
             dst.fill(0);
@@ -142,7 +144,7 @@ fn on_write(
             opus_decode(&cfg, dec, &src, dst)
         } else {
             let len = usize::min(src.len(), dst.len());
-            src.copy_to_slice(&mut dst[..len]);
+            dst[..len].copy_from_slice(&src[..len]);
             len
         };
 
@@ -160,13 +162,12 @@ fn on_error(tx: mpsc::Sender<Error>, notify: Notify) -> impl ErrorFn {
     }
 }
 
-fn opus_encode(cfg: &Config, enc: &mut opus::Encoder, src: &[u8], buf: &mut [u8]) -> Bytes {
-    let len = match cfg.sample_format {
+fn opus_encode(cfg: &Config, enc: &mut opus::Encoder, src: &[u8], buf: &mut [u8]) -> usize {
+    match cfg.sample_format {
         SampleFormat::S16 => enc.encode(convert_slice(src), buf),
         SampleFormat::F32 => enc.encode_float(convert_slice(src), buf),
     }
-    .unwrap();
-    Bytes::copy_from_slice(&buf[..len])
+    .unwrap()
 }
 
 fn opus_decode(cfg: &Config, dec: &mut opus::Decoder, src: &[u8], buf: &mut [u8]) -> usize {
