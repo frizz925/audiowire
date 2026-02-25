@@ -12,25 +12,17 @@
 
 #define OUTPUT_ELEMENT 0
 #define INPUT_ELEMENT 1
+#define PROPERTIES_COUNT 2
 
 #define STREAM_FIELDS \
     aw_stream_base_t base; \
-    bool is_input; \
     AudioUnit unit;
 
 struct aw_stream {
     STREAM_FIELDS
-};
-
-typedef struct aw_stream_playback {
-    STREAM_FIELDS
-} aw_stream_playback_t;
-
-typedef struct aw_stream_record {
-    STREAM_FIELDS
     AudioBufferList *buflist;
     UInt32 bufsize;
-} aw_stream_record_t;
+};
 
 typedef struct audio_device {
     UInt32 id;
@@ -38,6 +30,21 @@ typedef struct audio_device {
     UInt32 in_channels;
     UInt32 out_channels;
 } audio_device_t;
+
+typedef struct audio_properties {
+    bool enabled;
+    int default_device_idx;
+
+    AudioObjectPropertyScope property_scope;
+    AudioObjectPropertyElement property_element;
+
+    AudioUnitScope unit_scope;
+    AudioUnitScope unit_scope_inverse;
+    AudioUnitElement unit_element;
+
+    AudioUnitPropertyID callback_id;
+    AURenderCallback callback;
+} audio_properties_t;
 
 static char err_msg[512];
 
@@ -75,11 +82,12 @@ static OSStatus input_proc(void *refcon,
                            UInt32 frames,
                            AudioBufferList *io_data) {
     OSStatus err;
-    aw_stream_record_t *s = (aw_stream_record_t *)refcon;
+    aw_stream_t *s = (aw_stream_t *)refcon;
     if ((err = AudioUnitRender(s->unit, flags, timestamp, bus, frames, s->buflist))) {
         return err;
     }
-    aw_stream_base_t *base = &s->base;
+
+    aw_stream_base_t *base = (aw_stream_base_t *)s;
     for (int i = 0; i < s->buflist->mNumberBuffers; i++) {
         AudioBuffer *buf = &s->buflist->mBuffers[i];
         UInt32 bufsize = buf->mDataByteSize;
@@ -88,11 +96,12 @@ static OSStatus input_proc(void *refcon,
     return noErr;
 }
 
-static inline bool is_valid_device(const aw_config_t *cfg, const char *devname, int idx, bool is_output) {
+static inline bool
+is_valid_device(const aw_config_t *cfg, const char *devname, int idx, bool input_enabled, bool output_enabled) {
     const audio_device_t *device = devices + idx;
-    if (is_output && device->out_channels < cfg->channels)
+    if (input_enabled && device->in_channels < cfg->channels)
         return false;
-    if (!is_output && device->in_channels < cfg->channels)
+    if (output_enabled && device->out_channels < cfg->channels)
         return false;
     if (devname && !strstr(device->name, devname))
         return false;
@@ -107,16 +116,45 @@ aw_result_t aw_start(aw_stream_t **s,
                      aw_write_callback_t write_cb,
                      aw_error_callback_t error_cb,
                      void *userdata) {
-    bool is_output = write_cb != NULL;
-    int device_idx = is_output ? default_output_idx : default_input_idx;
-    if (!is_valid_device(&cfg, devname, device_idx, is_output)) {
-        device_idx = -1;
-        for (int idx = 0; idx < device_count; idx++) {
-            if (is_valid_device(&cfg, devname, idx, is_output)) {
-                device_idx = idx;
-                break;
-            }
-        }
+    bool input_enabled = read_cb != NULL;
+    bool output_enabled = write_cb != NULL;
+
+    audio_properties_t properties_list[PROPERTIES_COUNT] = {
+        {
+            output_enabled,
+            default_output_idx,
+            kAudioObjectPropertyScopeOutput,
+            OUTPUT_ELEMENT,
+            kAudioUnitScope_Output,
+            kAudioUnitScope_Input,
+            OUTPUT_ELEMENT,
+            kAudioUnitProperty_SetRenderCallback,
+            output_proc,
+        },
+        {
+            input_enabled,
+            default_input_idx,
+            kAudioObjectPropertyScopeInput,
+            INPUT_ELEMENT,
+            kAudioUnitScope_Input,
+            kAudioUnitScope_Output,
+            INPUT_ELEMENT,
+            kAudioOutputUnitProperty_SetInputCallback,
+            input_proc,
+        },
+    };
+
+    int device_idx = -1;
+    for (int idx = 0; idx < PROPERTIES_COUNT && device_idx < 0; idx++) {
+        audio_properties_t *prop = &properties_list[idx];
+        if (!prop->enabled)
+            continue;
+        if (is_valid_device(&cfg, devname, prop->default_device_idx, input_enabled, output_enabled))
+            device_idx = prop->default_device_idx;
+    }
+    for (int idx = 0; idx < device_count && device_idx < 0; idx++) {
+        if (is_valid_device(&cfg, devname, idx, input_enabled, output_enabled))
+            device_idx = idx;
     }
     if (device_idx < 0)
         return aw_result(-1, "Device not found");
@@ -125,7 +163,7 @@ aw_result_t aw_start(aw_stream_t **s,
     const char *device_name = device->name;
 
     aw_result_t result;
-    aw_stream_t *stream = calloc(1, is_output ? sizeof(aw_stream_playback_t) : sizeof(aw_stream_record_t));
+    aw_stream_t *stream = calloc(1, sizeof(aw_stream_t));
     aw_stream_base_t *base = &stream->base;
     aw_stream_base_init(base, cfg, device_name, read_cb, write_cb, error_cb, userdata);
 
@@ -135,61 +173,63 @@ aw_result_t aw_start(aw_stream_t **s,
     AudioValueRange *ranges = NULL;
     OSStatus err = noErr;
 
-    // Set device sample rate
-
-    // Get device sample rate
-    Float64 sample_rate = cfg.sample_rate;
-    address.mSelector = kAudioDevicePropertyNominalSampleRate;
-    address.mScope = is_output ? kAudioObjectPropertyScopeOutput : kAudioObjectPropertyScopeInput;
-    address.mElement = is_output ? OUTPUT_ELEMENT : INPUT_ELEMENT;
-    err = AudioObjectSetPropertyData(device_id, &address, 0, NULL, sizeof(sample_rate), &sample_rate);
-
-    UInt32 propsize = sizeof(sample_rate);
-    CATCH_ERR(AudioObjectGetPropertyData(device_id, &address, 0, NULL, &propsize, &sample_rate));
-
-    if (err || cfg.sample_rate != sample_rate) {
-        address.mSelector = kAudioDevicePropertyAvailableNominalSampleRates;
-        CATCH_ERR(AudioObjectGetPropertyDataSize(device_id, &address, 0, NULL, &propsize));
-        UInt32 range_count = propsize / sizeof(AudioValueRange);
-
-        ranges = calloc(range_count, sizeof(AudioValueRange));
-        CATCH_ERR(AudioObjectGetPropertyData(device_id, &address, 0, NULL, &propsize, ranges));
-
-        sample_rate = 0.0;
-        for (int i = 0; i < range_count; i++) {
-            const AudioValueRange *range = ranges + i;
-            if (range->mMaximum <= cfg.sample_rate && range->mMaximum > sample_rate)
-                sample_rate = range->mMaximum;
-        }
-        free(ranges);
-        ranges = NULL;
-
-        address.mSelector = kAudioDevicePropertyNominalSampleRate;
-        CATCH_ERR(AudioObjectSetPropertyData(device_id, &address, 0, NULL, sizeof(sample_rate), &sample_rate));
-    }
-    base->sample_rate = sample_rate;
-
-    // Set device buffer sample count
+    UInt32 propsize;
     UInt32 samples = cfg.buffer_samples;
-    address.mSelector = kAudioDevicePropertyBufferFrameSize;
-    CATCH_ERR(AudioObjectSetPropertyData(device_id, &address, 0, NULL, sizeof(samples), &samples));
+    for (int i = 0; i < PROPERTIES_COUNT; i++) {
+        audio_properties_t *prop = &properties_list[i];
+        if (!prop->enabled)
+            continue;
+
+        // Set device sample rate
+
+        // Get device sample rate
+        Float64 sample_rate = cfg.sample_rate;
+        address.mSelector = kAudioDevicePropertyNominalSampleRate;
+        address.mScope = prop->property_scope;
+        address.mElement = prop->property_element;
+        err = AudioObjectSetPropertyData(device_id, &address, 0, NULL, sizeof(sample_rate), &sample_rate);
+
+        propsize = sizeof(sample_rate);
+        CATCH_ERR(AudioObjectGetPropertyData(device_id, &address, 0, NULL, &propsize, &sample_rate));
+
+        if (err || cfg.sample_rate != sample_rate) {
+            address.mSelector = kAudioDevicePropertyAvailableNominalSampleRates;
+            CATCH_ERR(AudioObjectGetPropertyDataSize(device_id, &address, 0, NULL, &propsize));
+            UInt32 range_count = propsize / sizeof(AudioValueRange);
+
+            ranges = calloc(range_count, sizeof(AudioValueRange));
+            CATCH_ERR(AudioObjectGetPropertyData(device_id, &address, 0, NULL, &propsize, ranges));
+
+            sample_rate = 0.0;
+            for (int i = 0; i < range_count; i++) {
+                const AudioValueRange *range = ranges + i;
+                if (range->mMaximum <= cfg.sample_rate && range->mMaximum > sample_rate)
+                    sample_rate = range->mMaximum;
+            }
+            free(ranges);
+            ranges = NULL;
+
+            address.mSelector = kAudioDevicePropertyNominalSampleRate;
+            CATCH_ERR(AudioObjectSetPropertyData(device_id, &address, 0, NULL, sizeof(sample_rate), &sample_rate));
+        }
+        base->sample_rate = sample_rate;
+
+        // Set device buffer sample count
+        address.mSelector = kAudioDevicePropertyBufferFrameSize;
+        CATCH_ERR(AudioObjectSetPropertyData(device_id, &address, 0, NULL, sizeof(samples), &samples));
+    }
 
     // Set up buffer list
-    if (!is_output) {
-        AudioObjectPropertyAddress address = {
-            .mSelector = kAudioDevicePropertyStreamConfiguration,
-            .mScope = kAudioObjectPropertyScopeInput,
-            .mElement = kAudioObjectPropertyElementMain,
-        };
-        CATCH_ERR(AudioObjectGetPropertyDataSize(device_id, &address, 0, NULL, &propsize));
+    address.mSelector = kAudioDevicePropertyStreamConfiguration;
+    address.mScope = kAudioObjectPropertyScopeInput;
+    address.mElement = kAudioObjectPropertyElementMain;
+    CATCH_ERR(AudioObjectGetPropertyDataSize(device_id, &address, 0, NULL, &propsize));
 
-        buflist = calloc(1, propsize);
-        CATCH_ERR(AudioObjectGetPropertyData(device_id, &address, 0, NULL, &propsize, buflist));
+    buflist = calloc(1, propsize);
+    CATCH_ERR(AudioObjectGetPropertyData(device_id, &address, 0, NULL, &propsize, buflist));
 
-        aw_stream_record_t *record = (aw_stream_record_t *)stream;
-        record->buflist = buflist;
-        record->bufsize = propsize;
-    }
+    stream->buflist = buflist;
+    stream->bufsize = propsize;
 
     // Instantiate audio unit
     AudioComponentDescription desc = {
@@ -206,20 +246,15 @@ aw_result_t aw_start(aw_stream_t **s,
         return aw_result(-1, "Failed to create audio unit instance");
     stream->unit = unit;
 
-    UInt32 enable_io;
-
-    // Disable output
-    if (!is_output) {
-        enable_io = 0;
-        CATCH_ERR(AudioUnitSetProperty(
-            unit, kAudioOutputUnitProperty_EnableIO, kAudioUnitScope_Output, OUTPUT_ELEMENT, &enable_io, propsize));
-    }
-
-    // Enable input
-    if (!is_output) {
-        enable_io = 1;
-        CATCH_ERR(AudioUnitSetProperty(
-            unit, kAudioOutputUnitProperty_EnableIO, kAudioUnitScope_Input, INPUT_ELEMENT, &enable_io, propsize));
+    for (int i = 0; i < PROPERTIES_COUNT; i++) {
+        audio_properties_t *prop = &properties_list[i];
+        UInt32 enable_io = prop->enabled;
+        CATCH_ERR(AudioUnitSetProperty(unit,
+                                       kAudioOutputUnitProperty_EnableIO,
+                                       prop->unit_scope,
+                                       prop->unit_element,
+                                       &enable_io,
+                                       sizeof(enable_io)));
     }
 
     // Set audio unit device
@@ -228,62 +263,63 @@ aw_result_t aw_start(aw_stream_t **s,
                                    kAudioUnitScope_Global,
                                    kAudioObjectPropertyElementMain,
                                    &device_id,
-                                   sizeof(AudioDeviceID)));
+                                   sizeof(device_id)));
 
-    // Get device format
-    AudioStreamBasicDescription format;
-    propsize = sizeof(format);
-    CATCH_ERR(AudioUnitGetProperty(unit,
-                                   kAudioUnitProperty_StreamFormat,
-                                   is_output ? kAudioUnitScope_Output : kAudioUnitScope_Input,
-                                   is_output ? OUTPUT_ELEMENT : INPUT_ELEMENT,
-                                   &format,
-                                   &propsize));
+    for (int i = 0; i < PROPERTIES_COUNT; i++) {
+        audio_properties_t *prop = &properties_list[i];
+        if (!prop->enabled)
+            continue;
 
-    // Device and application sample rates must match
-    UInt32 framesize = cfg.channels * aw_sample_size(cfg.sample_format);
-    format.mFormatID = kAudioFormatLinearPCM;
-    format.mFramesPerPacket = 1;
-    format.mBytesPerPacket = framesize;
-    format.mBytesPerFrame = framesize;
-    format.mChannelsPerFrame = cfg.channels;
+        // Get device format
+        AudioStreamBasicDescription format;
+        propsize = sizeof(format);
+        CATCH_ERR(AudioUnitGetProperty(
+            unit, kAudioUnitProperty_StreamFormat, prop->unit_scope, prop->unit_element, &format, &propsize));
 
-    switch (cfg.sample_format) {
-    case AW_SAMPLE_FORMAT_S16:
-        format.mBitsPerChannel = 16;
-        format.mFormatFlags = kAudioFormatFlagIsSignedInteger;
-        break;
-    case AW_SAMPLE_FORMAT_F32:
-        format.mBitsPerChannel = 32;
-        format.mFormatFlags = kAudioFormatFlagsNativeFloatPacked;
-        break;
+        // Device and application sample rates must match
+        UInt32 framesize = cfg.channels * aw_sample_size(cfg.sample_format);
+        format.mFormatID = kAudioFormatLinearPCM;
+        format.mFramesPerPacket = 1;
+        format.mBytesPerPacket = framesize;
+        format.mBytesPerFrame = framesize;
+        format.mChannelsPerFrame = cfg.channels;
+
+        switch (cfg.sample_format) {
+        case AW_SAMPLE_FORMAT_S16:
+            format.mBitsPerChannel = 16;
+            format.mFormatFlags = kAudioFormatFlagIsSignedInteger;
+            break;
+        case AW_SAMPLE_FORMAT_F32:
+            format.mBitsPerChannel = 32;
+            format.mFormatFlags = kAudioFormatFlagsNativeFloatPacked;
+            break;
+        }
+
+        // Set application format
+        CATCH_ERR(AudioUnitSetProperty(unit,
+                                       kAudioUnitProperty_StreamFormat,
+                                       prop->unit_scope_inverse,
+                                       prop->unit_element,
+                                       &format,
+                                       sizeof(format)));
+
+        // Set application maximum frames
+        CATCH_ERR(AudioUnitSetProperty(unit,
+                                       kAudioUnitProperty_MaximumFramesPerSlice,
+                                       prop->unit_scope_inverse,
+                                       prop->unit_element,
+                                       &samples,
+                                       sizeof(samples)));
+
+        // Set audio unit callback
+        AURenderCallbackStruct callback = {prop->callback, stream};
+        CATCH_ERR(AudioUnitSetProperty(unit,
+                                       prop->callback_id,
+                                       kAudioUnitScope_Global,
+                                       kAudioObjectPropertyElementMain,
+                                       &callback,
+                                       sizeof(callback)));
     }
-
-    // Set application format
-    CATCH_ERR(AudioUnitSetProperty(unit,
-                                   kAudioUnitProperty_StreamFormat,
-                                   is_output ? kAudioUnitScope_Input : kAudioUnitScope_Output,
-                                   is_output ? OUTPUT_ELEMENT : INPUT_ELEMENT,
-                                   &format,
-                                   sizeof(format)));
-
-    // Set application maximum frames
-    CATCH_ERR(AudioUnitSetProperty(unit,
-                                   kAudioUnitProperty_MaximumFramesPerSlice,
-                                   is_output ? kAudioUnitScope_Input : kAudioUnitScope_Output,
-                                   is_output ? OUTPUT_ELEMENT : INPUT_ELEMENT,
-                                   &samples,
-                                   sizeof(samples)));
-
-    // Set audio unit callback
-    AURenderCallbackStruct input = {is_output ? output_proc : input_proc, stream};
-    CATCH_ERR(AudioUnitSetProperty(unit,
-                                   is_output ? kAudioUnitProperty_SetRenderCallback
-                                             : kAudioOutputUnitProperty_SetInputCallback,
-                                   kAudioUnitScope_Global,
-                                   kAudioObjectPropertyElementMain,
-                                   &input,
-                                   sizeof(input)));
 
     // Initialize and start audio unit
     CATCH_ERR(AudioUnitInitialize(unit));
@@ -418,10 +454,7 @@ aw_result_t aw_stop(aw_stream_t *stream) {
     if (AW_RESULT_IS_ERR(res))
         return res;
 
-    if (stream->is_input) {
-        aw_stream_record_t *record = (aw_stream_record_t *)stream;
-        free(record->buflist);
-    }
+    free(stream->buflist);
     aw_stream_base_deinit(&stream->base);
     free(stream);
 
