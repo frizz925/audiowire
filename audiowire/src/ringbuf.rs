@@ -92,38 +92,6 @@ impl<T> RingBuf<T> {
             })
             .unwrap();
     }
-
-    /*
-    pub fn make_contiguous(&self) -> &mut Self {
-        let (ridx, widx) = (self.ridx, self.widx);
-        if ridx == widx {
-            // Just move the cursors to the beginning of the buffer if they match
-            self.ridx = 0;
-            self.widx = 0;
-            return self;
-        } else if ridx < widx {
-            // Move written bytes to the beginning of the buffer
-            self.buf.copy_within(ridx..widx, 0);
-            self.ridx -= ridx;
-            self.widx -= ridx;
-            return self;
-        }
-
-        let length = self.buf.len();
-        let offset = length - ridx;
-        self.reverse(0, length);
-        self.reverse(0, offset);
-        self.reverse(offset, length);
-
-        self.ridx = (self.ridx + offset) & self.mask;
-        self.widx = (self.widx + offset) & self.mask;
-        self
-    }
-
-    fn reverse(&mut self, start: usize, end: usize) {
-        self.buf[start..end].reverse();
-    }
-    */
 }
 
 impl<T: Clone + Default> RingBuf<T> {
