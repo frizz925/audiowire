@@ -7,7 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define MAX_BUFFER_SAMPLES 65536
+#define MAX_BUFFER_FRAMES 65536
 
 #define AW_RESULT_DEVICE_NOT_FOUND aw_result(-1, "Device not found")
 
@@ -21,8 +21,12 @@ typedef struct aw_stream_base {
     void *userdata;
 } aw_stream_base_t;
 
-static inline size_t sample_buffer_size(const aw_config_t *cfg, size_t count) {
-    return count * cfg->channels * aw_sample_size(cfg->sample_format);
+static inline size_t frame_size(const aw_config_t *cfg) {
+    return cfg->channels * aw_sample_size(cfg->sample_format);
+}
+
+static inline size_t frame_buffer_size(const aw_config_t *cfg, size_t count) {
+    return count * frame_size(cfg);
 }
 
 static inline aw_result_t aw_result(int code, const char *message) {
