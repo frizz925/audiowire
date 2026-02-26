@@ -139,12 +139,12 @@ where
         let error_log = log.clone();
 
         let frames = config.duration_to_frames(Duration::from_millis(
-            (2 * config.buffer_duration().as_millis() as u64) + rtt as u64,
+            3 * config.buffer_duration().as_millis() as u64,
         ));
         let bufsize = config.frames_to_bytes(frames);
         info!(
             log, "Using buffer size {bufsize} bytes";
-            "frames" => frames, "rtt" => rtt
+            "frames" => frames
         );
 
         StreamBuilder::new(config.clone())
