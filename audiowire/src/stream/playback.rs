@@ -204,7 +204,7 @@ where
 
         rtt,
         delta,
-        buffer_ms: config.buffer_duration().as_millis() as i64,
+        buffer_ms: config.max_buffer_duration().as_millis() as i64,
         sequence: 0,
     })
 }
