@@ -176,7 +176,7 @@ fn opus_decode(cfg: &Config, dec: &mut opus::Decoder, src: &[u8], buf: &mut [u8]
         SampleFormat::F32 => dec.decode_float(&src, convert_slice_mut(buf), false),
     }
     .unwrap();
-    cfg.frame_count_to_bytes(cnt)
+    cfg.frames_to_bytes(cnt)
 }
 
 fn condvar_notify(notify: &Notify) {

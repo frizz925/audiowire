@@ -1,5 +1,5 @@
 use std::{
-    io::{Cursor, ErrorKind},
+    io::{ErrorKind, Read},
     net::{SocketAddr, ToSocketAddrs, UdpSocket},
     ops::{Deref, DerefMut},
     process::ExitCode,
@@ -8,7 +8,7 @@ use std::{
         atomic::{AtomicBool, Ordering},
     },
     thread,
-    time::{Duration, Instant, SystemTime},
+    time::{Instant, SystemTime},
 };
 
 use anyhow::{Ok as _Ok, Result};
@@ -22,7 +22,7 @@ use audiowire::{
             client::{ClientClose, ClientCommand, ClientHeartbeat},
             server::ServerCommand,
         },
-        data::{IncomingServerData, OutgoingClientData},
+        data::{IncomingAudioData, IncomingServerData, OutgoingAudioData, OutgoingClientData},
         handshake::{Handshake, HandshakeAck, HandshakeInit, HandshakeReply},
         message::{IncomingMessage, OutgoingMessage},
         socket::{SharedUdpWrapper, UdpWrapper, wrap_udp, wrap_udp_owned},
@@ -31,7 +31,7 @@ use audiowire::{
     },
     stream::{Peer, handle_playback, handle_record},
 };
-use audiowire_serde::{Deserialize, Serialize};
+use audiowire_serde::Serialize;
 use clap::{Arg, Command};
 use slog::{Logger, debug, error, info, o};
 
@@ -48,8 +48,8 @@ impl Client {
     fn handle_packet(&mut self, mut buf: &[u8]) -> Result<()> {
         match IncomingMessage::deserialize(&mut buf)? {
             IncomingMessage::Data(buf) => {
-                let data = IncomingServerData::<Vec<u8>>::deserialize(Cursor::new(buf))?;
-                self.handle_data(&data.0);
+                let data = IncomingAudioData::deserialize(IncomingServerData::deserialize(buf)?)?;
+                self.handle_data(data);
             }
             IncomingMessage::ServerCommand(cmd) => match cmd {
                 ServerCommand::Heartbeat(_) => {
@@ -68,9 +68,9 @@ impl Client {
         Ok(())
     }
 
-    fn handle_data(&mut self, data: &[u8]) {
+    fn handle_data<R: Read>(&mut self, data: IncomingAudioData<R>) {
         self.write(data)
-            .map_err(|e| error!(self.log, "Failed to decode Opus packet"; "error" => e.to_string()))
+            .map_err(|e| error!(self.log, "Failed to write incoming audio data"; "error" => e.to_string()))
             .ok();
     }
 }
@@ -117,7 +117,7 @@ impl HeartbeatWorker {
         let elapsed = self.last_heartbeat.read().unwrap().elapsed();
         if elapsed > HEARTBEAT_GRACE_PERIOD {
             info!(self.log, "Closing due to server inactivity");
-            stop();
+            background_stop();
             false
         } else {
             true
@@ -233,6 +233,7 @@ fn run(
     let sock = Arc::new(sock.into_inner());
     sock.set_nonblocking(true)?;
 
+    let mut sequence = 0;
     let record = if device.source_enabled && flags.sink_enabled {
         let log = log.new(o!("stream" => "record"));
         let stream = handle_record(
@@ -243,7 +244,16 @@ fn run(
             Arc::clone(&sock),
             addr,
             move |src, dst| {
-                OutgoingMessage::from(OutgoingClientData(stream_id, src)).serialize(dst)
+                sequence += 1;
+                OutgoingMessage::from(OutgoingClientData(
+                    stream_id,
+                    OutgoingAudioData {
+                        sequence,
+                        timestamp: SystemTime::now(),
+                        data: src,
+                    },
+                ))
+                .serialize(dst)
             },
             opus_enabled,
         )?;
@@ -254,7 +264,16 @@ fn run(
 
     let playback = if device.sink_enabled && flags.source_enabled {
         let log = log.new(o!("stream" => "playback"));
-        let stream = handle_playback(&log, &config, name.as_str(), sink_name, opus_enabled)?;
+        let stream = handle_playback(
+            &log,
+            &config,
+            name.as_str(),
+            sink_name,
+            &time,
+            org_timestamp,
+            rec_timestamp,
+            opus_enabled,
+        )?;
         Some(stream)
     } else {
         None
@@ -262,7 +281,7 @@ fn run(
 
     let last_heartbeat = Arc::new(RwLock::new(Instant::now()));
     let mut client = Client {
-        inner: Peer::new(record, playback, &time, org_timestamp, rec_timestamp)?,
+        inner: Peer { record, playback },
         log: log.clone(),
         last_heartbeat: Arc::clone(&last_heartbeat),
     };
@@ -283,13 +302,14 @@ fn run(
         thread::spawn(|| worker.run())
     });
 
+    let interval = config.buffer_duration() / 4;
     let mut exit_code = ExitCode::SUCCESS;
     let mut sock = wrap_udp(sock);
     while is_running() {
         let (buf, addr) = match sock.raw_recv_from() {
             Ok(value) => value,
             Err(e) if e.kind() == ErrorKind::WouldBlock => {
-                thread::sleep(Duration::from_millis(100));
+                thread::sleep(interval);
                 continue;
             }
             Err(e) => {
@@ -318,9 +338,13 @@ fn is_running() -> bool {
 }
 
 fn stop() {
-    RUNNING.store(false, Ordering::Relaxed);
+    background_stop();
     let (lock, cvar) = &NOTIFY;
     let mut running = lock.lock().unwrap();
     *running = false;
     cvar.notify_all();
+}
+
+fn background_stop() {
+    RUNNING.store(false, Ordering::Relaxed);
 }

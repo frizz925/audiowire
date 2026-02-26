@@ -1,5 +1,6 @@
 use std::{
     cell::UnsafeCell,
+    io::{Error, ErrorKind, Read, Result, Seek, SeekFrom, Write},
     sync::atomic::{AtomicUsize, Ordering},
 };
 
@@ -18,34 +19,24 @@ impl<T> RingBuf<T> {
     /// How many bytes of data is remaining to read.
     #[inline]
     pub fn remaining(&self) -> usize {
-        let (ridx, widx) = (
+        self.count_remaining(
             self.ridx.load(Ordering::Relaxed),
             self.widx.load(Ordering::Relaxed),
-        );
-        if widx >= ridx {
-            widx - ridx
-        } else {
-            self.capacity - ridx + widx
-        }
+        )
     }
 
     /// How many bytes of data is available to write.
     #[inline]
     pub fn available(&self) -> usize {
-        let (ridx, widx) = (
+        self.count_available(
             self.ridx.load(Ordering::Relaxed),
             self.widx.load(Ordering::Relaxed),
-        );
-        if ridx > widx {
-            ridx - widx - 1
-        } else {
-            self.mask - widx + ridx
-        }
+        )
     }
 
     #[inline]
     pub fn capacity(&self) -> usize {
-        self.capacity
+        self.mask
     }
 
     pub fn read_chunks<'a>(&'a self) -> Chunks<'a, T> {
@@ -91,6 +82,42 @@ impl<T> RingBuf<T> {
                 Some((x + off) & self.mask)
             })
             .unwrap();
+    }
+
+    pub fn reserve(&self, requested: usize) {
+        if requested > self.mask {
+            panic!(
+                "Trying to reserve more than capacity. capacity={}, requested={}",
+                self.mask, requested
+            );
+        }
+        let (ridx, widx) = (
+            self.ridx.load(Ordering::Acquire),
+            self.widx.load(Ordering::Relaxed),
+        );
+        let available = self.count_available(ridx, widx);
+        if requested <= available {
+            return;
+        }
+        let offset = requested - available;
+        self.ridx
+            .store((ridx + offset) & self.mask, Ordering::Release);
+    }
+
+    fn count_remaining(&self, ridx: usize, widx: usize) -> usize {
+        if widx >= ridx {
+            widx - ridx
+        } else {
+            self.capacity - ridx + widx
+        }
+    }
+
+    fn count_available(&self, ridx: usize, widx: usize) -> usize {
+        if ridx > widx {
+            ridx - widx - 1
+        } else {
+            self.mask - widx + ridx
+        }
     }
 }
 
@@ -145,7 +172,11 @@ impl<'a, T> Chunks<'a, T> {
 
     #[inline]
     pub fn remaining(&self) -> usize {
-        self.len - self.pos
+        if self.len > self.pos {
+            self.len - self.pos
+        } else {
+            0
+        }
     }
 
     #[inline]
@@ -173,6 +204,10 @@ impl<'a, T: Copy> Chunks<'a, T> {
         read
     }
 
+    pub fn advance(&mut self, off: usize) {
+        self.pos += off;
+    }
+
     pub fn consume(mut self) -> Vec<T> {
         let mut buf = Vec::with_capacity(self.remaining());
         let pos = if self.pos < self.head.len() {
@@ -184,6 +219,12 @@ impl<'a, T: Copy> Chunks<'a, T> {
         buf.extend_from_slice(&self.tail[pos..]);
         self.pos += buf.len();
         buf
+    }
+}
+
+impl<'a> Read for Chunks<'a, u8> {
+    fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
+        Ok(Chunks::read(self, buf))
     }
 }
 
@@ -238,7 +279,7 @@ impl<'a, T> ChunksMut<'a, T> {
 
 impl<'a, T: Copy> ChunksMut<'a, T> {
     pub fn write(&mut self, src: &[T]) -> usize {
-        if self.available() <= 0 {
+        if self.pos >= self.len {
             return 0;
         }
         // Read from head if the cursor hasn't advanced past the head
@@ -253,6 +294,16 @@ impl<'a, T: Copy> ChunksMut<'a, T> {
         }
         self.pos += write;
         write
+    }
+}
+
+impl<'a> Write for ChunksMut<'a, u8> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        Ok(ChunksMut::write(self, buf))
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
     }
 }
 
@@ -274,6 +325,37 @@ where
     len
 }
 
+macro_rules! impl_seek {
+    ($($struct:ident),+) => {
+        $(
+            impl<'a, T> Seek for $struct<'a, T> {
+                fn seek(&mut self, pos: SeekFrom) -> Result<u64> {
+                    let (base_pos, off) = match pos {
+                        SeekFrom::Start(n) => {
+                            self.pos = n as usize;
+                            return Ok(n);
+                        }
+                        SeekFrom::End(n) => (self.len, n),
+                        SeekFrom::Current(n) => (self.pos, n),
+                    };
+                    match base_pos.checked_add_signed(off as isize) {
+                        Some(n) => {
+                            self.pos = n;
+                            Ok(n as u64)
+                        }
+                        None => Err(Error::new(
+                            ErrorKind::InvalidInput,
+                            "Would seek to overflow or negative position",
+                        )),
+                    }
+                }
+            }
+        )+
+    };
+}
+
+impl_seek!(Chunks, ChunksMut);
+
 #[cfg(test)]
 mod test {
     use crate::ringbuf::RingBuf;
@@ -285,7 +367,7 @@ mod test {
 
         assert!(rb.capacity() > req);
         assert_eq!(rb.remaining(), 0);
-        assert_eq!(rb.available(), rb.capacity() - 1);
+        assert_eq!(rb.available(), rb.capacity());
 
         let chunks = rb.read_chunks();
         assert_eq!(chunks.remaining(), rb.remaining());
@@ -315,7 +397,7 @@ mod test {
             src.free();
 
             assert_eq!(rb.remaining(), 0);
-            assert_eq!(rb.available(), rb.capacity() - 1);
+            assert_eq!(rb.available(), rb.capacity());
             assert_eq!(&buf[..length], &sample[..]);
         }
     }

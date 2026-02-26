@@ -39,8 +39,7 @@ pub trait UdpWrapper<S>: private::Sealed {
     {
         let len = {
             let mut cur = Cursor::new(self.buf_mut());
-            let message = T::into(value);
-            message.serialize(&mut cur).unwrap();
+            T::into(value).serialize(&mut cur).unwrap();
             cur.position() as usize
         };
         let buf = self.buf();

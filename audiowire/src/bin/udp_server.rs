@@ -9,7 +9,7 @@ use std::{
         atomic::{AtomicBool, Ordering},
     },
     thread,
-    time::{Duration, Instant, SystemTime},
+    time::{Instant, SystemTime},
 };
 
 use anyhow::{Ok as _Ok, Result};
@@ -23,7 +23,7 @@ use audiowire::{
             client::{ClientClose, ClientCommand, ClientHeartbeat},
             server::{SERVER_CLOSE, SERVER_HEARTBEAT},
         },
-        data::{IncomingClientData, OutgoingServerData},
+        data::{IncomingAudioData, IncomingClientData, OutgoingAudioData, OutgoingServerData},
         handshake::{Handshake, HandshakeAck, HandshakeInit, HandshakeReply},
         message::{IncomingMessage, OutgoingMessage},
         socket::{SharedUdpWrapper, UdpWrapper, wrap_udp},
@@ -32,7 +32,7 @@ use audiowire::{
     },
     stream::{Peer, handle_playback, handle_record},
 };
-use audiowire_serde::{Deserialize, Serialize};
+use audiowire_serde::Serialize;
 use clap::{Arg, Command, value_parser};
 use slog::{Logger, debug, error, info, o, trace, warn};
 
@@ -86,7 +86,8 @@ impl Server {
             }
             IncomingMessage::Data(reader) => {
                 let data = IncomingClientData::deserialize(reader)?;
-                self.handle_data(context, data);
+
+                self.handle_data(context, data)?;
             }
             _ => (),
         }
@@ -126,21 +127,22 @@ impl Server {
         Ok(())
     }
 
-    fn handle_data<'a>(&self, context: Context<'a>, data: IncomingClientData<Vec<u8>>) {
+    fn handle_data<'a, R: Read>(
+        &self,
+        context: Context<'a>,
+        data: IncomingClientData<R>,
+    ) -> std::io::Result<()> {
         let Context { log, .. } = context;
-        let IncomingClientData(stream_id, buf) = data;
+        let IncomingClientData(stream_id, reader) = data;
         let log = log.new(o!("stream_id" => stream_id));
         if let Some(client) = self.clients.write().unwrap().get_mut(&stream_id) {
             if let Client::Running(c) = client {
-                c.write(&buf)
-                    .map_err(
-                        |e| error!(log, "Failed to decode Opus packet"; "error" => e.to_string()),
-                    )
-                    .ok();
+                c.handle_data(&log, reader)?;
             } else {
                 warn!(log, "Received data packet for client that is not running");
             }
         }
+        Ok(())
     }
 
     fn handle_handshake_init<'a>(
@@ -230,6 +232,7 @@ impl Server {
         } = hs;
         let opus_enabled = self.device.opus_enabled && flags.opus_enabled;
 
+        let mut sequence = 0;
         let record = if self.device.source_enabled && flags.sink_enabled {
             let log = log.new(o!("stream" => "record"));
             let stream = handle_record(
@@ -239,7 +242,15 @@ impl Server {
                 self.device.source_name.as_deref(),
                 Arc::clone(self.sock.as_inner()),
                 addr.to_owned(),
-                move |src, dst| OutgoingMessage::from(OutgoingServerData(src)).serialize(dst),
+                move |src, dst| {
+                    sequence += 1;
+                    OutgoingMessage::from(OutgoingServerData(OutgoingAudioData {
+                        sequence,
+                        timestamp: SystemTime::now(),
+                        data: src,
+                    }))
+                    .serialize(dst)
+                },
                 opus_enabled,
             )?;
             Some(stream)
@@ -254,6 +265,9 @@ impl Server {
                 &self.config,
                 addr.to_string(),
                 self.device.sink_name.as_deref(),
+                &time,
+                org_timestamp,
+                rec_timestamp,
                 opus_enabled,
             )?;
             Some(stream)
@@ -262,7 +276,7 @@ impl Server {
         };
 
         let client = ClientRunning {
-            inner: Peer::new(record, playback, &time, org_timestamp, rec_timestamp)?,
+            inner: Peer { record, playback },
             addr: addr.to_owned(),
             last_heartbeat: Instant::now(),
         }
@@ -300,6 +314,17 @@ struct ClientRunning {
     inner: Peer,
     addr: SocketAddr,
     last_heartbeat: Instant,
+}
+
+impl ClientRunning {
+    fn handle_data<R: Read>(&mut self, log: &Logger, reader: R) -> std::io::Result<()> {
+        self.write(IncomingAudioData::deserialize(reader)?)
+            .map_err(
+                |e| error!(log, "Failed to write incoming audio data"; "error" => e.to_string()),
+            )
+            .ok();
+        Ok(())
+    }
 }
 
 impl Deref for ClientRunning {
@@ -441,6 +466,7 @@ fn run(log: Logger, config: Config, device: DeviceConfig, addr: SocketAddr) -> R
     .unwrap();
 
     let clients = Arc::new(RwLock::new(HashMap::new()));
+    let interval = config.buffer_duration() / 4;
     let mut server = Server::new(config, device, Arc::clone(&sock), Arc::clone(&clients));
     let mut handles = Vec::new();
 
@@ -458,7 +484,7 @@ fn run(log: Logger, config: Config, device: DeviceConfig, addr: SocketAddr) -> R
         let (buf, addr) = match sock.raw_recv_from() {
             Ok(value) => value,
             Err(e) if e.kind() == ErrorKind::WouldBlock => {
-                thread::sleep(Duration::from_millis(100));
+                thread::sleep(interval);
                 continue;
             }
             Err(e) => {

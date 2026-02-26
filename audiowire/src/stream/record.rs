@@ -1,6 +1,7 @@
 use std::{
     io::Cursor,
     net::{SocketAddr, UdpSocket},
+    ops::Deref,
     sync::Arc,
 };
 
@@ -18,17 +19,25 @@ use crate::{
 
 const INTERNAL_BUFFER_SIZE: usize = 65536;
 
-pub trait SerializeFn: Fn(&[u8], &mut Cursor<&mut [u8]>) -> std::io::Result<()> {}
+pub trait SerializeFn: FnMut(&[u8], &mut Cursor<&mut [u8]>) -> std::io::Result<()> {}
 
-impl<F: Fn(&[u8], &mut Cursor<&mut [u8]>) -> std::io::Result<()>> SerializeFn for F {}
+impl<F: FnMut(&[u8], &mut Cursor<&mut [u8]>) -> std::io::Result<()>> SerializeFn for F {}
 
 pub struct RecordStream {
-    pub inner: Stream,
+    inner: Stream,
 }
 
 impl AsRef<Stream> for RecordStream {
     fn as_ref(&self) -> &Stream {
         &self.inner
+    }
+}
+
+impl Deref for RecordStream {
+    type Target = Stream;
+
+    fn deref(&self) -> &Self::Target {
+        self.as_ref()
     }
 }
 
@@ -42,7 +51,7 @@ struct RecordProducer {
 }
 
 impl RecordProducer {
-    fn write(&mut self, src: &[u8], serialize: impl SerializeFn) {
+    fn write(&mut self, src: &[u8], mut serialize: impl SerializeFn) {
         let (start, end) = {
             let len = if let Some(enc) = &mut self.encoder {
                 enc.encode(convert_slice(src), &mut self.buf).unwrap()
@@ -72,7 +81,7 @@ pub fn handle_record<N, D>(
     device: Option<D>,
     sock: Arc<UdpSocket>,
     addr: SocketAddr,
-    serialize: impl SerializeFn + Send + Sync + 'static,
+    mut serialize: impl SerializeFn + Send + Sync + 'static,
     opus_enabled: bool,
 ) -> Result<RecordStream>
 where
@@ -100,7 +109,7 @@ where
             buf: [0u8; 65536],
         };
         StreamBuilder::new(config.to_owned())
-            .read_cb(move |src| producer.write(src, &serialize))
+            .read_cb(move |src| producer.write(src, &mut serialize))
             .error_cb(create_error_cb(log.clone()))
             .start(name, device)?
     };

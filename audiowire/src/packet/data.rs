@@ -1,6 +1,9 @@
-use std::io::Read;
+use std::{
+    io::{Read, Result},
+    time::SystemTime,
+};
 
-use audiowire_derive::{Deserialize, Serialize};
+use audiowire_derive::Serialize;
 use audiowire_serde::{Deserialize, Serialize};
 
 use super::{
@@ -14,11 +17,44 @@ pub struct OutgoingClientData<T: Serialize>(pub StreamId, pub T);
 #[derive(Serialize)]
 pub struct OutgoingServerData<T: Serialize>(pub T);
 
-#[derive(Deserialize)]
-pub struct IncomingClientData<T: Deserialize>(pub StreamId, pub T);
+#[derive(Serialize)]
+pub struct OutgoingAudioData<T: Serialize> {
+    pub sequence: u64,
+    pub timestamp: SystemTime,
+    pub data: T,
+}
 
-#[derive(Deserialize)]
-pub struct IncomingServerData<T: Deserialize>(pub T);
+pub struct IncomingClientData<R: Read>(pub StreamId, pub R);
+
+impl<R: Read> IncomingClientData<R> {
+    pub fn deserialize(mut reader: R) -> Result<Self> {
+        Ok(Self(StreamId::deserialize(&mut reader)?, reader))
+    }
+}
+
+pub struct IncomingServerData;
+
+impl IncomingServerData {
+    pub fn deserialize<R: Read>(reader: R) -> Result<R> {
+        Ok(reader)
+    }
+}
+
+pub struct IncomingAudioData<R: Read> {
+    pub sequence: u64,
+    pub timestamp: SystemTime,
+    pub reader: R,
+}
+
+impl<R: Read> IncomingAudioData<R> {
+    pub fn deserialize(mut reader: R) -> Result<Self> {
+        Ok(Self {
+            sequence: u64::deserialize(&mut reader)?,
+            timestamp: SystemTime::deserialize(&mut reader)?,
+            reader,
+        })
+    }
+}
 
 macro_rules! outgoing_data {
     (
