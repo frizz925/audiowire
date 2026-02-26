@@ -332,11 +332,7 @@ impl ClientRunning {
             return;
         }
         let addr = addr.to_owned();
-        info!(
-            log, "Client address changed";
-            "old_addr" => self.addr,
-            "new_addr" => addr,
-        );
+        info!(log, "Client address changed"; "old_addr" => self.addr);
         if let Some(record) = self.record.as_ref() {
             record.update_addr(addr);
             self.addr = addr;
