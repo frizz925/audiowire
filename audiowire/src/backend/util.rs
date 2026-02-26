@@ -1,4 +1,7 @@
-use std::sync::{Arc, Condvar, Mutex, mpsc};
+use std::{
+    sync::{Arc, Condvar, Mutex, mpsc},
+    thread,
+};
 
 use slog::{Logger, info};
 
@@ -56,16 +59,20 @@ pub fn audio_check(log: &Logger, config: &Config, device: &DeviceConfig) -> Resu
         );
         Some(stream)
     } else {
-        let mut buf = [0u8; 65536];
-        let src = vec![0u8; config.buffer_size()];
-        let buf = if let Some(mut enc) = encoder {
-            let len = opus_encode(config, &mut enc, &src, &mut buf);
-            buf[..len].to_vec()
-        } else {
-            src
-        };
-        data_tx.send(buf).unwrap();
-        condvar_notify(&notify);
+        let config = config.clone();
+        let notify = Arc::clone(&notify);
+        thread::spawn(move || {
+            let mut buf = [0u8; 65536];
+            let src = vec![0u8; config.buffer_size()];
+            let buf = if let Some(mut enc) = encoder {
+                let len = opus_encode(&config, &mut enc, &src, &mut buf);
+                buf[..len].to_vec()
+            } else {
+                src
+            };
+            data_tx.send(buf).unwrap();
+            condvar_notify(&notify);
+        });
         None
     };
 
@@ -82,12 +89,16 @@ pub fn audio_check(log: &Logger, config: &Config, device: &DeviceConfig) -> Resu
         );
         Some(stream)
     } else {
-        let src = data_rx.recv().unwrap();
-        if let Some(mut dec) = decoder {
-            let mut buf = [0u8; 65536];
-            opus_decode(config, &mut dec, &src, &mut buf);
-        }
-        condvar_notify(&notify);
+        let config = config.clone();
+        let notify = Arc::clone(&notify);
+        thread::spawn(move || {
+            let src = data_rx.recv().unwrap();
+            if let Some(mut dec) = decoder {
+                let mut buf = [0u8; 65536];
+                opus_decode(&config, &mut dec, &src, &mut buf);
+            }
+            condvar_notify(&notify);
+        });
         None
     };
 
