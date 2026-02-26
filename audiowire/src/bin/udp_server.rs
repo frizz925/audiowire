@@ -9,7 +9,7 @@ use std::{
         atomic::{AtomicBool, Ordering},
     },
     thread,
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime},
 };
 
 use anyhow::{Ok as _Ok, Result};
@@ -28,13 +28,13 @@ use audiowire::{
         message::{IncomingMessage, OutgoingMessage},
         socket::{SharedUdpWrapper, UdpWrapper, wrap_udp},
         stream::{AtomicStreamId, StreamFlags, StreamId},
-        time::{NetworkTime, get_current_timestamp},
+        time::NetworkTime,
     },
     stream::{Peer, handle_playback, handle_record},
 };
 use audiowire_serde::{Deserialize, Serialize};
 use clap::{Arg, Command, value_parser};
-use slog::{Logger, debug, error, info, o, warn};
+use slog::{Logger, debug, error, info, o, trace, warn};
 
 static NOTIFY: (Mutex<bool>, Condvar) = (Mutex::new(true), Condvar::new());
 static RUNNING: AtomicBool = AtomicBool::new(true);
@@ -46,7 +46,7 @@ type UdpWrapperShared = SharedUdpWrapper<Arc<UdpSocket>>;
 struct Context<'a> {
     log: &'a Logger,
     addr: &'a SocketAddr,
-    rec_timestamp: u64,
+    rec_timestamp: SystemTime,
 }
 
 struct Server {
@@ -112,7 +112,7 @@ impl Server {
             ClientCommand::Heartbeat(ClientHeartbeat(stream_id)) => {
                 if let Some(Client::Running(c)) = self.clients.write().unwrap().get_mut(&stream_id)
                 {
-                    info!(log, "Received client heartbeat"; "stream_id" => stream_id);
+                    debug!(log, "Received client heartbeat"; "stream_id" => stream_id);
                     c.last_heartbeat = Instant::now();
                 }
             }
@@ -164,7 +164,7 @@ impl Server {
 
         let stream_id = self.next_stream_id.fetch_add(1, Ordering::Acquire);
         let xmt_timestamp = {
-            let org_timestamp = get_current_timestamp();
+            let org_timestamp = SystemTime::now();
             let client = ClientHandshake {
                 flags,
                 org_timestamp,
@@ -202,8 +202,8 @@ impl Server {
         let log = log.new(o!("stream_id" => stream_id));
         info!(log,
             "Got handshake ack";
-            "rec_timestamp" => time.rec_timestamp,
-            "xmt_timestamp" => time.xmt_timestamp
+            "rec_timestamp" => logging::Timestamp(time.rec_timestamp),
+            "xmt_timestamp" => logging::Timestamp(time.xmt_timestamp)
         );
 
         let client = self.clients.write().unwrap().remove(&stream_id);
@@ -262,7 +262,7 @@ impl Server {
         };
 
         let client = ClientRunning {
-            inner: Peer::new(record, playback, &time, org_timestamp, rec_timestamp),
+            inner: Peer::new(record, playback, &time, org_timestamp, rec_timestamp)?,
             addr: addr.to_owned(),
             last_heartbeat: Instant::now(),
         }
@@ -292,7 +292,7 @@ impl From<ClientRunning> for Client {
 
 struct ClientHandshake {
     flags: StreamFlags,
-    org_timestamp: u64,
+    org_timestamp: SystemTime,
     last_handshake: Instant,
 }
 
@@ -467,8 +467,8 @@ fn run(log: Logger, config: Config, device: DeviceConfig, addr: SocketAddr) -> R
                 break;
             }
         };
-        debug!(log, "Received data {} bytes", buf.len(); "addr" => addr);
-        let rec_timestamp = get_current_timestamp();
+        trace!(log, "Received data {} bytes", buf.len(); "addr" => addr);
+        let rec_timestamp = SystemTime::now();
 
         let log = log.new(o!("addr" => addr));
         let context = Context {

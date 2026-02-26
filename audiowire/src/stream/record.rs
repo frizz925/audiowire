@@ -4,7 +4,7 @@ use std::{
     sync::Arc,
 };
 
-use slog::{Logger, debug, error, info};
+use slog::{Logger, error, info, trace};
 
 use crate::{
     backend::{
@@ -59,7 +59,7 @@ impl RecordProducer {
         let buf = &self.buf[start..end];
         self.sock
             .send_to(buf, self.addr)
-            .map(|len| debug!(self.log, "Sent data {} bytes", len))
+            .map(|len| trace!(self.log, "Sent data {} bytes", len))
             .map_err(|e| error!(self.log, "Failed to send data packet"; "error" => e))
             .ok();
     }

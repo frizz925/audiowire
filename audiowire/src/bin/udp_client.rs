@@ -8,7 +8,7 @@ use std::{
         atomic::{AtomicBool, Ordering},
     },
     thread,
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime},
 };
 
 use anyhow::{Ok as _Ok, Result};
@@ -27,7 +27,7 @@ use audiowire::{
         message::{IncomingMessage, OutgoingMessage},
         socket::{SharedUdpWrapper, UdpWrapper, wrap_udp, wrap_udp_owned},
         stream::{StreamFlags, StreamId},
-        time::{NetworkTime, get_current_timestamp},
+        time::NetworkTime,
     },
     stream::{Peer, handle_playback, handle_record},
 };
@@ -53,7 +53,7 @@ impl Client {
             }
             IncomingMessage::ServerCommand(cmd) => match cmd {
                 ServerCommand::Heartbeat(_) => {
-                    info!(self.log, "Received server heartbeat");
+                    debug!(self.log, "Received server heartbeat");
                     let mut value = self.last_heartbeat.write().unwrap();
                     *value = Instant::now();
                 }
@@ -185,7 +185,7 @@ fn run(
     let mut sock = wrap_udp_owned(UdpSocket::bind(":::0")?);
 
     info!(log, "Initiating handshake with server"; "addr" => saddr);
-    let org_timestamp = get_current_timestamp();
+    let org_timestamp = SystemTime::now();
     let init: Handshake = HandshakeInit {
         flags: StreamFlags {
             source_enabled,
@@ -197,7 +197,7 @@ fn run(
     sock.send_message_to(init, &saddr)?;
 
     let (message, addr) = sock.recv_message_from()?;
-    let rec_timestamp = get_current_timestamp();
+    let rec_timestamp = SystemTime::now();
 
     let HandshakeReply {
         stream_id,
@@ -216,15 +216,15 @@ fn run(
         "Got handshake reply";
         "stream_id" => stream_id,
         "stream_flags" => flags,
-        "rec_timestamp" => time.rec_timestamp,
-        "xmt_timestamp" => time.xmt_timestamp
+        "rec_timestamp" => logging::Timestamp(time.rec_timestamp),
+        "xmt_timestamp" => logging::Timestamp(time.xmt_timestamp)
     );
 
     let ack: Handshake = HandshakeAck {
         stream_id,
         time: NetworkTime {
             rec_timestamp,
-            xmt_timestamp: get_current_timestamp(),
+            xmt_timestamp: SystemTime::now(),
         },
     }
     .into();
@@ -262,7 +262,7 @@ fn run(
 
     let last_heartbeat = Arc::new(RwLock::new(Instant::now()));
     let mut client = Client {
-        inner: Peer::new(record, playback, &time, org_timestamp, rec_timestamp),
+        inner: Peer::new(record, playback, &time, org_timestamp, rec_timestamp)?,
         log: log.clone(),
         last_heartbeat: Arc::clone(&last_heartbeat),
     };

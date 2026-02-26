@@ -1,4 +1,7 @@
-use std::io::{Read, Result};
+use std::{
+    io::{Read, Result},
+    time::{Duration, SystemTime},
+};
 
 pub trait Deserialize: Sized {
     fn deserialize<R: Read>(reader: R) -> Result<Self>;
@@ -53,5 +56,14 @@ impl Deserialize for Vec<u8> {
         let mut vec = vec![0u8; len];
         reader.read_exact(&mut vec)?;
         Ok(vec)
+    }
+}
+
+impl Deserialize for SystemTime {
+    fn deserialize<R: Read>(reader: R) -> Result<Self> {
+        let time = SystemTime::UNIX_EPOCH
+            .checked_add(Duration::from_millis(u64::deserialize(reader)?))
+            .unwrap();
+        Ok(time)
     }
 }

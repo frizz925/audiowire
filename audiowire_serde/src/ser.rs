@@ -1,4 +1,7 @@
-use std::io::{Result, Write};
+use std::{
+    io::{Result, Write},
+    time::SystemTime,
+};
 
 pub trait Serialize {
     fn serialize<W: Write>(&self, writer: W) -> Result<()>;
@@ -63,5 +66,15 @@ impl Serialize for String {
 impl Serialize for str {
     fn serialize<W: Write>(&self, writer: W) -> Result<()> {
         self.as_bytes().serialize(writer)
+    }
+}
+
+impl Serialize for SystemTime {
+    fn serialize<W: Write>(&self, writer: W) -> Result<()> {
+        (self
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64)
+            .serialize(writer)
     }
 }

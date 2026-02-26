@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::time::{Duration, SystemTime, SystemTimeError};
 
 use crate::packet::time::NetworkTime;
 
@@ -15,18 +15,16 @@ impl Peer {
         record: Option<RecordStream>,
         playback: Option<PlaybackStream>,
         time: &NetworkTime,
-        org_timestamp: u64,
-        rec_timestamp: u64,
-    ) -> Self {
-        Self {
-            rtt: Duration::from_millis(
-                rec_timestamp
-                    .abs_diff(org_timestamp)
-                    .abs_diff(time.xmt_timestamp.abs_diff(time.rec_timestamp)),
-            ),
+        org_timestamp: SystemTime,
+        rec_timestamp: SystemTime,
+    ) -> Result<Self, SystemTimeError> {
+        let local_dur = rec_timestamp.duration_since(org_timestamp)?;
+        let remote_dur = time.xmt_timestamp.duration_since(time.rec_timestamp)?;
+        Ok(Self {
+            rtt: local_dur.abs_diff(remote_dur),
             record,
             playback,
-        }
+        })
     }
 
     pub fn write(&mut self, buf: &[u8]) -> opus::Result<()> {
