@@ -12,7 +12,7 @@ use slog::{Logger, error, info, trace};
 
 use crate::{
     backend::{
-        config::Config,
+        config::{Config, SampleFormat},
         result::Result,
         stream::{Stream, StreamBuilder},
     },
@@ -57,6 +57,7 @@ impl Deref for RecordStream {
 
 struct RecordProducer {
     log: Logger,
+    config: Config,
 
     sock: Arc<UdpSocket>,
     addr: SocketAddr,
@@ -81,7 +82,11 @@ impl RecordProducer {
     fn write(&mut self, src: &[u8], mut serialize: impl SerializeFn) {
         let (start, end) = {
             let len = if let Some(enc) = &mut self.encoder {
-                enc.encode(convert_slice(src), &mut self.buf).unwrap()
+                match self.config.sample_format {
+                    SampleFormat::S16 => enc.encode(convert_slice(src), &mut self.buf),
+                    SampleFormat::F32 => enc.encode_float(convert_slice(src), &mut self.buf),
+                }
+                .unwrap()
             } else {
                 let len = src.len();
                 self.buf[..len].copy_from_slice(src);
@@ -132,6 +137,8 @@ where
     let stream = {
         let mut producer = RecordProducer {
             log: log.clone(),
+            config: config.clone(),
+
             sock,
             addr,
             encoder,

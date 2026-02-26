@@ -11,7 +11,7 @@ use slog::{Logger, info, o, trace};
 
 use crate::{
     backend::{
-        config::Config,
+        config::{Config, SampleFormat},
         stream::{Stream, StreamBuilder},
     },
     opus::convert_slice_mut,
@@ -77,8 +77,13 @@ impl PlaybackStream {
         let len = usize::deserialize(&mut reader)?;
         reader.read_exact(&mut buf[..len])?;
         if let Some(dec) = decoder {
-            let (src, buf) = buf.split_at_mut(len);
-            let cnt = dec.decode(&src, convert_slice_mut(buf), false)?;
+            let (src, buf) = aligned_split_at_mut(config.sample_format, buf, len);
+            let cnt = match config.sample_format {
+                SampleFormat::S16 => dec.decode(&src[..len], convert_slice_mut(buf), false)?,
+                SampleFormat::F32 => {
+                    dec.decode_float(&src[..len], convert_slice_mut(buf), false)?
+                }
+            };
             let len = config.frames_to_bytes(cnt);
             write_to_ringbuf(&buf[..len], rb);
         } else {
@@ -87,6 +92,18 @@ impl PlaybackStream {
 
         Ok(())
     }
+}
+
+fn aligned_split_at_mut(
+    format: SampleFormat,
+    buf: &mut [u8],
+    pos: usize,
+) -> (&mut [u8], &mut [u8]) {
+    let off = match format {
+        SampleFormat::S16 => pos % size_of::<u16>(),
+        SampleFormat::F32 => pos % size_of::<f32>(),
+    };
+    buf.split_at_mut(pos + off)
 }
 
 fn write_to_ringbuf(src: &[u8], rb: &RingBuf<u8>) {
