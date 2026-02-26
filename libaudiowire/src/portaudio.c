@@ -3,6 +3,7 @@
 #include <assert.h>
 #include <portaudio.h>
 #include <stdbool.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -79,14 +80,16 @@ aw_result_t aw_start(aw_stream_t **s,
     const PaDeviceInfo *info;
     PaDeviceIndex device = paNoDevice;
     if (input_enabled && device == paNoDevice) {
-        info = Pa_GetDeviceInfo(Pa_GetDefaultInputDevice());
+        device = Pa_GetDefaultInputDevice();
+        info = Pa_GetDeviceInfo(device);
         if (!device_is_valid(&cfg, info, devname, input_enabled, output_enabled))
-            device = Pa_GetDefaultInputDevice();
+            device = paNoDevice;
     }
     if (output_enabled && device == paNoDevice) {
-        info = Pa_GetDeviceInfo(Pa_GetDefaultOutputDevice());
-        if (device_is_valid(&cfg, info, devname, input_enabled, output_enabled))
-            device = Pa_GetDefaultOutputDevice();
+        device = Pa_GetDefaultOutputDevice();
+        info = Pa_GetDeviceInfo(device);
+        if (!device_is_valid(&cfg, info, devname, input_enabled, output_enabled))
+            device = paNoDevice;
     }
     for (PaDeviceIndex idx = 0; idx < Pa_GetDeviceCount() && device == paNoDevice; idx++) {
         info = Pa_GetDeviceInfo(idx);
