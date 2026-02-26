@@ -113,8 +113,9 @@ impl Server {
             ClientCommand::Heartbeat(ClientHeartbeat(stream_id)) => {
                 if let Some(Client::Running(c)) = self.clients.write().unwrap().get_mut(&stream_id)
                 {
-                    debug!(log, "Received client heartbeat"; "stream_id" => stream_id);
-                    c.maybe_update_addr(log, addr);
+                    let log = log.new(o!("stream_id" => stream_id));
+                    debug!(log, "Received client heartbeat");
+                    c.maybe_update_addr(&log, addr);
                     c.last_heartbeat = Instant::now();
                 }
             }
