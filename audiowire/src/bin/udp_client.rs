@@ -182,7 +182,7 @@ fn run(
         sink_enabled,
         opus_enabled,
     } = device;
-    let mut sock = wrap_udp_owned(UdpSocket::bind(":::0")?);
+    let mut sock = wrap_udp_owned(UdpSocket::bind("0.0.0.0:0")?);
 
     info!(log, "Initiating handshake with server"; "addr" => saddr);
     let org_timestamp = SystemTime::now();
