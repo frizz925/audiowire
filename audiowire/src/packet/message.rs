@@ -11,15 +11,6 @@ pub struct OutgoingMessage<T: Serialize> {
     pub payload: T,
 }
 
-impl<T: Serialize> OutgoingMessage<T> {
-    pub fn into_bytes(self) -> Vec<u8> {
-        let mut buf = Vec::new();
-        // Writing to Vec<u8> is infallible
-        self.serialize(&mut buf).unwrap();
-        buf
-    }
-}
-
 macro_rules! message_types {
     (
         $(

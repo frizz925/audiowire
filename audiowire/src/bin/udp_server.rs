@@ -26,7 +26,7 @@ use audiowire::{
         data::{IncomingClientData, OutgoingServerData},
         handshake::{Handshake, HandshakeAck, HandshakeInit, HandshakeReply},
         message::{IncomingMessage, OutgoingMessage},
-        socket::{UdpWrapper, wrap_udp},
+        socket::{SharedUdpWrapper, UdpWrapper, wrap_udp},
         stream::{AtomicStreamId, StreamFlags, StreamId},
         time::{NetworkTime, get_current_timestamp},
     },
@@ -39,6 +39,10 @@ use slog::{Logger, debug, error, info, o, warn};
 static NOTIFY: (Mutex<bool>, Condvar) = (Mutex::new(true), Condvar::new());
 static RUNNING: AtomicBool = AtomicBool::new(true);
 
+type SharedClientMap = Arc<RwLock<HashMap<StreamId, Client>>>;
+
+type UdpWrapperShared = SharedUdpWrapper<Arc<UdpSocket>>;
+
 struct Context<'a> {
     log: &'a Logger,
     addr: &'a SocketAddr,
@@ -48,25 +52,30 @@ struct Context<'a> {
 struct Server {
     config: Config,
     device: DeviceConfig,
-    sock: Arc<UdpSocket>,
+    sock: UdpWrapperShared,
 
     next_stream_id: AtomicStreamId,
-    clients: RwLock<HashMap<StreamId, Client>>,
+    clients: SharedClientMap,
 }
 
 impl Server {
-    fn new(config: Config, device: DeviceConfig, sock: UdpSocket) -> Self {
+    fn new(
+        config: Config,
+        device: DeviceConfig,
+        sock: Arc<UdpSocket>,
+        clients: SharedClientMap,
+    ) -> Self {
         Self {
             config,
             device,
-            sock: Arc::new(sock),
+            sock: wrap_udp(sock),
 
             next_stream_id: AtomicStreamId::new(1),
-            clients: RwLock::new(HashMap::new()),
+            clients,
         }
     }
 
-    fn handle_packet<'a, R: Read>(&self, context: Context<'a>, reader: R) -> Result<()> {
+    fn handle_packet<'a, R: Read>(&mut self, context: Context<'a>, reader: R) -> Result<()> {
         let message = IncomingMessage::deserialize(reader)?;
         match message {
             IncomingMessage::Handshake(hs) => {
@@ -84,7 +93,7 @@ impl Server {
         Ok(())
     }
 
-    fn handle_handshake<'a>(&self, context: Context<'a>, hs: Handshake) -> Result<()> {
+    fn handle_handshake<'a>(&mut self, context: Context<'a>, hs: Handshake) -> Result<()> {
         match hs {
             Handshake::Init(init) => {
                 self.handle_handshake_init(context, init)?;
@@ -134,7 +143,11 @@ impl Server {
         }
     }
 
-    fn handle_handshake_init<'a>(&self, context: Context<'a>, init: HandshakeInit) -> Result<()> {
+    fn handle_handshake_init<'a>(
+        &mut self,
+        context: Context<'a>,
+        init: HandshakeInit,
+    ) -> Result<()> {
         let DeviceConfig {
             source_enabled,
             sink_enabled,
@@ -162,7 +175,7 @@ impl Server {
             org_timestamp
         };
 
-        let msg: OutgoingMessage<_> = Handshake::from(HandshakeReply {
+        let reply: Handshake = HandshakeReply {
             stream_id,
             flags: StreamFlags {
                 source_enabled: source_enabled && flags.sink_enabled,
@@ -173,9 +186,9 @@ impl Server {
                 rec_timestamp,
                 xmt_timestamp,
             },
-        })
+        }
         .into();
-        self.sock.send_to(msg.into_bytes().as_ref(), addr)?;
+        self.sock.send_message_to(reply, addr)?;
         Ok(())
     }
 
@@ -224,7 +237,7 @@ impl Server {
                 &self.config,
                 addr.to_string(),
                 self.device.source_name.as_deref(),
-                Arc::clone(&self.sock),
+                Arc::clone(self.sock.as_inner()),
                 addr.to_owned(),
                 move |src, dst| OutgoingMessage::from(OutgoingServerData(src)).serialize(dst),
                 opus_enabled,
@@ -305,12 +318,12 @@ impl DerefMut for ClientRunning {
 
 struct HeartbeatWorker {
     log: Logger,
-    server: Arc<Server>,
+    sock: UdpWrapperShared,
+    clients: SharedClientMap,
 }
 
 impl HeartbeatWorker {
-    fn run(self) {
-        let mut sock = wrap_udp(&self.server.sock);
+    fn run(mut self) {
         let (lock, cvar) = &NOTIFY;
         let mut running = lock.lock().unwrap();
         while *running {
@@ -318,18 +331,19 @@ impl HeartbeatWorker {
                 .wait_timeout_while(running, HEARTBEAT_INTERVAL, |val| *val && is_running())
                 .unwrap();
             running = update;
-            self.check(&mut sock);
+            self.check();
         }
     }
 
-    fn check<S: UdpWrapper>(&self, sock: &mut S) {
+    fn check(&mut self) {
+        let Self { log, sock, clients } = self;
         let dead = {
             let mut stream_ids = Vec::new();
-            for (stream_id, client) in self.server.clients.read().unwrap().iter() {
+            for (stream_id, client) in clients.read().unwrap().iter() {
                 let last_instant = match client {
                     Client::Handshake(c) => c.last_handshake,
                     Client::Running(c) => {
-                        self.pulse(sock, c.addr, *stream_id);
+                        Self::pulse(log, sock, c.addr, *stream_id);
                         c.last_heartbeat
                     }
                 };
@@ -340,26 +354,27 @@ impl HeartbeatWorker {
             stream_ids
         };
         if dead.len() > 0 {
-            let mut clients = self.server.clients.write().unwrap();
+            let mut clients = self.clients.write().unwrap();
             for stream_id in dead {
                 clients.remove(&stream_id);
                 info!(
-                    self.log, "Removed client due to inactivity";
+                    log, "Removed client due to inactivity";
                     "stream_id" => stream_id
                 );
             }
         }
     }
 
-    fn pulse<S, A>(&self, sock: &mut S, addr: A, stream_id: StreamId)
-    where
-        S: UdpWrapper,
-        A: ToSocketAddrs,
-    {
+    fn pulse<A: ToSocketAddrs>(
+        log: &Logger,
+        sock: &mut UdpWrapperShared,
+        addr: A,
+        stream_id: StreamId,
+    ) {
         sock.send_message_to(SERVER_HEARTBEAT, addr)
             .map_err(|e| {
                 error!(
-                    self.log, "Failed to send heartbeat";
+                    log, "Failed to send heartbeat";
                     "stream_id" => stream_id,
                     "error" => e
                 )
@@ -411,7 +426,7 @@ fn main() -> Result<ExitCode> {
 }
 
 fn run(log: Logger, config: Config, device: DeviceConfig, addr: SocketAddr) -> Result<ExitCode> {
-    let sock = UdpSocket::bind(addr)?;
+    let sock = Arc::new(UdpSocket::bind(addr)?);
     info!(log, "Server listening at {}", addr.to_string());
     sock.set_nonblocking(true)?;
 
@@ -425,18 +440,20 @@ fn run(log: Logger, config: Config, device: DeviceConfig, addr: SocketAddr) -> R
     })
     .unwrap();
 
-    let server = Arc::new(Server::new(config, device, sock));
+    let clients = Arc::new(RwLock::new(HashMap::new()));
+    let mut server = Server::new(config, device, Arc::clone(&sock), Arc::clone(&clients));
     let mut handles = Vec::new();
 
     // Heartbeat handler
     let worker = HeartbeatWorker {
         log: log.new(o!("worker" => "heartbeat")),
-        server: Arc::clone(&server),
+        sock: wrap_udp(Arc::clone(&sock)),
+        clients: Arc::clone(&clients),
     };
     handles.push(thread::spawn(|| worker.run()));
 
     let mut exit_code = ExitCode::SUCCESS;
-    let mut sock = wrap_udp(&server.sock);
+    let mut sock = wrap_udp(sock);
     while is_running() {
         let (buf, addr) = match sock.raw_recv_from() {
             Ok(value) => value,

@@ -25,7 +25,7 @@ use audiowire::{
         data::{IncomingServerData, OutgoingClientData},
         handshake::{Handshake, HandshakeAck, HandshakeInit, HandshakeReply},
         message::{IncomingMessage, OutgoingMessage},
-        socket::{UdpWrapper, wrap_udp, wrap_udp_owned},
+        socket::{SharedUdpWrapper, UdpWrapper, wrap_udp, wrap_udp_owned},
         stream::{StreamFlags, StreamId},
         time::{NetworkTime, get_current_timestamp},
     },
@@ -92,14 +92,13 @@ impl DerefMut for Client {
 struct HeartbeatWorker {
     log: Logger,
     stream_id: StreamId,
-    sock: Arc<UdpSocket>,
+    sock: SharedUdpWrapper<Arc<UdpSocket>>,
     addr: SocketAddr,
     last_heartbeat: Arc<RwLock<Instant>>,
 }
 
 impl HeartbeatWorker {
-    fn run(self) {
-        let mut sock = wrap_udp(&self.sock);
+    fn run(mut self) {
         let (lock, cvar) = &NOTIFY;
         let mut running = lock.lock().unwrap();
         while *running {
@@ -110,11 +109,11 @@ impl HeartbeatWorker {
             if !self.check() {
                 break;
             }
-            self.pulse(&mut sock);
+            self.pulse();
         }
     }
 
-    fn check(&self) -> bool {
+    fn check(&mut self) -> bool {
         let elapsed = self.last_heartbeat.read().unwrap().elapsed();
         if elapsed > HEARTBEAT_GRACE_PERIOD {
             info!(self.log, "Closing due to server inactivity");
@@ -125,9 +124,10 @@ impl HeartbeatWorker {
         }
     }
 
-    fn pulse<S: UdpWrapper>(&self, sock: &mut S) {
+    fn pulse(&mut self) {
         let cmd: ClientCommand = ClientHeartbeat(self.stream_id).into();
-        sock.send_message_to(cmd, self.addr)
+        self.sock
+            .send_message_to(cmd, self.addr)
             .map_err(|e| error!(self.log, "Failed to send heartbeat"; "error" => e))
             .ok();
     }
@@ -230,8 +230,9 @@ fn run(
     .into();
     sock.send_message_to(ack, &saddr)?;
 
-    sock.set_nonblocking(true)?;
     let sock = Arc::new(sock.into_inner());
+    sock.set_nonblocking(true)?;
+
     let record = if device.source_enabled && flags.sink_enabled {
         let log = log.new(o!("stream" => "record"));
         let stream = handle_record(
@@ -275,7 +276,7 @@ fn run(
         let worker = HeartbeatWorker {
             log: log.new(o!("worker" => "heartbeat")),
             stream_id,
-            sock: Arc::clone(&sock),
+            sock: wrap_udp(Arc::clone(&sock)),
             addr,
             last_heartbeat,
         };

@@ -1,7 +1,6 @@
 use std::{
     io::{Cursor, Error, ErrorKind, Result},
     net::SocketAddr,
-    ops::Deref,
 };
 
 use audiowire_serde::Serialize;
@@ -11,33 +10,21 @@ use crate::packet::message::{IncomingMessage, OutgoingMessage};
 
 const DEFAULT_BUFFER_SIZE: usize = 65536;
 
-trait UdpWrapperInner {
-    fn buf(&self) -> &[u8];
+pub(self) mod private {
+    use std::net::UdpSocket;
 
-    fn cursor(&mut self) -> Cursor<&mut [u8]>;
+    pub trait Sealed {
+        fn sock(&self) -> &UdpSocket;
 
-    fn sock(&self) -> &UdpSocket;
+        fn buf(&self) -> &[u8];
 
-    fn sock_and_buf_mut(&mut self) -> (&UdpSocket, &mut [u8]);
+        fn buf_mut(&mut self) -> &mut [u8];
+
+        fn buf_mut_and_sock(&mut self) -> (&mut [u8], &UdpSocket);
+    }
 }
 
-pub trait UdpWrapper: Sized {
-    fn recv_message_from(&mut self) -> Result<(IncomingMessage<&[u8]>, SocketAddr)>;
-
-    fn send_message_to<T, A>(&mut self, value: T, addr: A) -> Result<()>
-    where
-        T: Into<OutgoingMessage<T>> + Serialize,
-        A: ToSocketAddrs;
-
-    fn raw_recv_from(&mut self) -> Result<(&[u8], SocketAddr)>;
-
-    fn raw_send_to<B, A>(&self, buf: B, addr: A) -> Result<()>
-    where
-        B: AsRef<[u8]>,
-        A: ToSocketAddrs;
-}
-
-impl<U: UdpWrapperInner + AsRef<UdpSocket>> UdpWrapper for U {
+pub trait UdpWrapper<S>: private::Sealed {
     fn recv_message_from(&mut self) -> Result<(IncomingMessage<&[u8]>, SocketAddr)> {
         let (buf, addr) = self.raw_recv_from()?;
         let message =
@@ -51,7 +38,7 @@ impl<U: UdpWrapperInner + AsRef<UdpSocket>> UdpWrapper for U {
         A: ToSocketAddrs,
     {
         let len = {
-            let mut cur = self.cursor();
+            let mut cur = Cursor::new(self.buf_mut());
             let message = T::into(value);
             message.serialize(&mut cur).unwrap();
             cur.position() as usize
@@ -62,7 +49,7 @@ impl<U: UdpWrapperInner + AsRef<UdpSocket>> UdpWrapper for U {
     }
 
     fn raw_recv_from(&mut self) -> Result<(&[u8], SocketAddr)> {
-        let (sock, buf) = self.sock_and_buf_mut();
+        let (buf, sock) = self.buf_mut_and_sock();
         let (len, addr) = sock.recv_from(buf)?;
         Ok((&buf[..len], addr))
     }
@@ -75,49 +62,10 @@ impl<U: UdpWrapperInner + AsRef<UdpSocket>> UdpWrapper for U {
         self.sock().send_to(buf.as_ref(), addr)?;
         Ok(())
     }
-}
 
-pub struct BorrowedUdpWrapper<S: AsRef<UdpSocket>> {
-    inner: S,
-    buf: [u8; DEFAULT_BUFFER_SIZE],
-}
+    fn as_inner(&self) -> &S;
 
-impl<S: AsRef<UdpSocket>> BorrowedUdpWrapper<S> {
-    pub fn as_inner(&self) -> &S {
-        &self.inner
-    }
-}
-
-impl<S: AsRef<UdpSocket>> UdpWrapperInner for BorrowedUdpWrapper<S> {
-    fn buf(&self) -> &[u8] {
-        &self.buf
-    }
-
-    fn cursor(&mut self) -> Cursor<&mut [u8]> {
-        Cursor::new(&mut self.buf)
-    }
-
-    fn sock(&self) -> &UdpSocket {
-        self.inner.as_ref()
-    }
-
-    fn sock_and_buf_mut(&mut self) -> (&UdpSocket, &mut [u8]) {
-        (self.inner.as_ref(), &mut self.buf)
-    }
-}
-
-impl<S: AsRef<UdpSocket>> AsRef<UdpSocket> for BorrowedUdpWrapper<S> {
-    fn as_ref(&self) -> &UdpSocket {
-        self.as_inner().as_ref()
-    }
-}
-
-impl<S: AsRef<UdpSocket>> Deref for BorrowedUdpWrapper<S> {
-    type Target = UdpSocket;
-
-    fn deref(&self) -> &Self::Target {
-        self.as_ref()
-    }
+    fn into_inner(self) -> S;
 }
 
 pub struct OwnedUdpWrapper {
@@ -125,55 +73,75 @@ pub struct OwnedUdpWrapper {
     buf: [u8; DEFAULT_BUFFER_SIZE],
 }
 
-impl OwnedUdpWrapper {
-    pub fn into_inner(self) -> UdpSocket {
-        self.inner
-    }
-}
-
-impl UdpWrapperInner for OwnedUdpWrapper {
-    fn buf(&self) -> &[u8] {
-        &self.buf
-    }
-
-    fn cursor(&mut self) -> Cursor<&mut [u8]> {
-        Cursor::new(&mut self.buf)
-    }
-
+impl private::Sealed for OwnedUdpWrapper {
     fn sock(&self) -> &UdpSocket {
         &self.inner
     }
 
-    fn sock_and_buf_mut(&mut self) -> (&UdpSocket, &mut [u8]) {
-        (&self.inner, &mut self.buf)
+    fn buf(&self) -> &[u8] {
+        self.buf.as_slice()
+    }
+
+    fn buf_mut(&mut self) -> &mut [u8] {
+        self.buf.as_mut_slice()
+    }
+
+    fn buf_mut_and_sock(&mut self) -> (&mut [u8], &UdpSocket) {
+        (self.buf.as_mut_slice(), &self.inner)
     }
 }
 
-impl Into<UdpSocket> for OwnedUdpWrapper {
-    fn into(self) -> UdpSocket {
-        self.into_inner()
-    }
-}
-
-impl AsRef<UdpSocket> for OwnedUdpWrapper {
-    fn as_ref(&self) -> &UdpSocket {
+impl UdpWrapper<UdpSocket> for OwnedUdpWrapper {
+    fn as_inner(&self) -> &UdpSocket {
         &self.inner
     }
-}
 
-impl Deref for OwnedUdpWrapper {
-    type Target = UdpSocket;
-
-    fn deref(&self) -> &Self::Target {
-        &self.inner
+    fn into_inner(self) -> UdpSocket {
+        self.inner
     }
 }
 
-pub fn wrap_udp<S>(sock: S) -> BorrowedUdpWrapper<S>
+pub struct SharedUdpWrapper<S> {
+    inner: S,
+    buf: [u8; DEFAULT_BUFFER_SIZE],
+}
+
+impl<S> private::Sealed for SharedUdpWrapper<S>
 where
     S: AsRef<UdpSocket>,
 {
-    BorrowedUdpWrapper {
+    fn sock(&self) -> &UdpSocket {
+        self.inner.as_ref()
+    }
+
+    fn buf(&self) -> &[u8] {
+        &self.buf
+    }
+
+    fn buf_mut(&mut self) -> &mut [u8] {
+        &mut self.buf
+    }
+
+    fn buf_mut_and_sock(&mut self) -> (&mut [u8], &UdpSocket) {
+        (&mut self.buf, self.inner.as_ref())
+    }
+}
+
+impl<S> UdpWrapper<S> for SharedUdpWrapper<S>
+where
+    S: AsRef<UdpSocket>,
+{
+    fn as_inner(&self) -> &S {
+        &self.inner
+    }
+
+    fn into_inner(self) -> S {
+        self.inner
+    }
+}
+
+pub fn wrap_udp<S: AsRef<UdpSocket>>(sock: S) -> SharedUdpWrapper<S> {
+    SharedUdpWrapper {
         inner: sock,
         buf: [0u8; DEFAULT_BUFFER_SIZE],
     }
