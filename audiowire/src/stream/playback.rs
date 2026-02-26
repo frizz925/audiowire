@@ -2,7 +2,7 @@ use std::{
     io::Read,
     ops::{Deref, Neg},
     sync::Arc,
-    time::{Duration, SystemTime},
+    time::SystemTime,
 };
 
 use anyhow::Result;
@@ -138,13 +138,11 @@ where
         let log = log.clone();
         let error_log = log.clone();
 
-        let frames = config.duration_to_frames(Duration::from_millis(
-            3 * config.buffer_duration().as_millis() as u64,
-        ));
-        let bufsize = config.frames_to_bytes(frames);
+        let frames = config.max_buffer_frames;
+        let bufsize = config.max_buffer_size();
         info!(
             log, "Using buffer size {bufsize} bytes";
-            "frames" => frames
+            "frames" => frames, "rtt" => rtt,
         );
 
         StreamBuilder::new(config.clone())
