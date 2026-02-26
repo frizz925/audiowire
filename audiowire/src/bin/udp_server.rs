@@ -114,7 +114,7 @@ impl Server {
                 if let Some(Client::Running(c)) = self.clients.write().unwrap().get_mut(&stream_id)
                 {
                     debug!(log, "Received client heartbeat"; "stream_id" => stream_id);
-                    c.maybe_update_addr(addr);
+                    c.maybe_update_addr(log, addr);
                     c.last_heartbeat = Instant::now();
                 }
             }
@@ -327,11 +327,16 @@ impl ClientRunning {
         Ok(())
     }
 
-    fn maybe_update_addr(&mut self, addr: &SocketAddr) {
+    fn maybe_update_addr(&mut self, log: &Logger, addr: &SocketAddr) {
         if self.addr.eq(addr) {
             return;
         }
         let addr = addr.to_owned();
+        info!(
+            log, "Client address changed";
+            "old_addr" => self.addr,
+            "new_addr" => addr,
+        );
         if let Some(record) = self.record.as_ref() {
             record.update_addr(addr);
             self.addr = addr;
