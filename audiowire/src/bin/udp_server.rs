@@ -108,12 +108,13 @@ impl Server {
     }
 
     fn handle_command<'a>(&self, context: Context<'a>, cmd: ClientCommand) -> Result<()> {
-        let Context { log, .. } = context;
+        let Context { log, addr, .. } = context;
         match cmd {
             ClientCommand::Heartbeat(ClientHeartbeat(stream_id)) => {
                 if let Some(Client::Running(c)) = self.clients.write().unwrap().get_mut(&stream_id)
                 {
                     debug!(log, "Received client heartbeat"; "stream_id" => stream_id);
+                    c.maybe_update_addr(addr);
                     c.last_heartbeat = Instant::now();
                 }
             }
@@ -324,6 +325,17 @@ impl ClientRunning {
             )
             .ok();
         Ok(())
+    }
+
+    fn maybe_update_addr(&mut self, addr: &SocketAddr) {
+        if self.addr.eq(addr) {
+            return;
+        }
+        let addr = addr.to_owned();
+        if let Some(record) = self.record.as_ref() {
+            record.update_addr(addr);
+            self.addr = addr;
+        }
     }
 }
 

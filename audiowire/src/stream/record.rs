@@ -2,7 +2,10 @@ use std::{
     io::Cursor,
     net::{SocketAddr, UdpSocket},
     ops::Deref,
-    sync::Arc,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+    },
 };
 
 use slog::{Logger, error, info, trace};
@@ -25,6 +28,17 @@ impl<F: FnMut(&[u8], &mut Cursor<&mut [u8]>) -> std::io::Result<()>> SerializeFn
 
 pub struct RecordStream {
     inner: Stream,
+
+    updated: Arc<AtomicBool>,
+    new_addr: Arc<Mutex<SocketAddr>>,
+}
+
+impl RecordStream {
+    pub fn update_addr(&self, addr: SocketAddr) {
+        let mut new_addr = self.new_addr.lock().unwrap();
+        *new_addr = addr;
+        self.updated.store(true, Ordering::Release);
+    }
 }
 
 impl AsRef<Stream> for RecordStream {
@@ -48,9 +62,22 @@ struct RecordProducer {
     addr: SocketAddr,
     encoder: Option<opus::Encoder>,
     buf: [u8; INTERNAL_BUFFER_SIZE],
+
+    updated: Arc<AtomicBool>,
+    new_addr: Arc<Mutex<SocketAddr>>,
 }
 
 impl RecordProducer {
+    fn maybe_update_socket(&mut self) {
+        if self
+            .updated
+            .compare_exchange_weak(true, false, Ordering::SeqCst, Ordering::Relaxed)
+            .is_ok()
+        {
+            self.addr = *self.new_addr.lock().unwrap();
+        }
+    }
+
     fn write(&mut self, src: &[u8], mut serialize: impl SerializeFn) {
         let (start, end) = {
             let len = if let Some(enc) = &mut self.encoder {
@@ -100,6 +127,8 @@ where
         None
     };
 
+    let updated = Arc::new(AtomicBool::new(false));
+    let new_addr = Arc::new(Mutex::new(addr));
     let stream = {
         let mut producer = RecordProducer {
             log: log.clone(),
@@ -107,9 +136,15 @@ where
             addr,
             encoder,
             buf: [0u8; 65536],
+
+            updated: Arc::clone(&updated),
+            new_addr: Arc::clone(&new_addr),
         };
         StreamBuilder::new(config.to_owned())
-            .read_cb(move |src| producer.write(src, &mut serialize))
+            .read_cb(move |src| {
+                producer.maybe_update_socket();
+                producer.write(src, &mut serialize);
+            })
             .error_cb(create_error_cb(log.clone()))
             .start(name, device)?
     };
@@ -119,5 +154,9 @@ where
         stream.device_name().unwrap_or("unknown")
     );
 
-    Ok(RecordStream { inner: stream })
+    Ok(RecordStream {
+        inner: stream,
+        updated,
+        new_addr,
+    })
 }
