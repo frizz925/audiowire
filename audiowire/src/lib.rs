@@ -6,6 +6,7 @@ pub mod logging;
 pub mod opus;
 pub mod packet;
 pub mod ringbuf;
+pub mod server;
 pub mod stream;
 
 mod macros;
