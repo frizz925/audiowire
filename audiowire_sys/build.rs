@@ -1,15 +1,17 @@
-use std::{
-    env::{self, var},
-    path::PathBuf,
-};
+use std::{env, path::PathBuf};
 
 fn main() {
-    let manifest_dir = var("CARGO_MANIFEST_DIR").unwrap();
+    if env::var("PROFILE")
+        .map(|s| s != "release")
+        .unwrap_or_default()
+    {
+        let manifest_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
+        println!(
+            "cargo:rustc-link-search={}/../libaudiowire/builddir",
+            manifest_dir
+        );
+    }
     println!("cargo:rustc-link-lib=audiowire2");
-    println!(
-        "cargo:rustc-link-search={}/../libaudiowire/builddir",
-        manifest_dir
-    );
 
     let bindings = bindgen::Builder::default()
         .header("wrapper.h")
