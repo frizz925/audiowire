@@ -1,7 +1,6 @@
 use std::{
-    io::{ErrorKind, Read},
+    io::ErrorKind,
     net::{SocketAddr, ToSocketAddrs, UdpSocket},
-    ops::{Deref, DerefMut},
     process::ExitCode,
     sync::{
         Arc, Condvar, Mutex, RwLock,
@@ -11,127 +10,27 @@ use std::{
     time::{Instant, SystemTime},
 };
 
-use anyhow::{Ok as _Ok, Result};
+use anyhow::Result;
 use audiowire::{
-    HEARTBEAT_GRACE_PERIOD, HEARTBEAT_INTERVAL,
     backend::{config::Config, util::audio_check},
+    client::{
+        client::Client,
+        handshake::{HandshakeResult, start_handshake},
+        heartbeat::HeartbeatWorker,
+    },
     command::{DeviceConfig, add_device_args},
     logging,
     packet::{
-        command::{
-            client::{ClientClose, ClientCommand, ClientHeartbeat},
-            server::ServerCommand,
-        },
-        data::{IncomingAudioData, IncomingServerData, OutgoingAudioData, OutgoingClientData},
-        handshake::{Handshake, HandshakeAck, HandshakeInit, HandshakeReply},
-        message::{IncomingMessage, OutgoingMessage},
-        socket::{SharedUdpWrapper, UdpWrapper, wrap_udp, wrap_udp_owned},
-        stream::{StreamFlags, StreamId},
-        time::NetworkTime,
+        command::client::{ClientClose, ClientCommand},
+        data::{OutgoingAudioData, OutgoingClientData},
+        message::OutgoingMessage,
+        socket::{UdpWrapper, wrap_udp, wrap_udp_owned},
     },
     stream::{Peer, handle_playback, handle_record},
 };
 use audiowire_serde::Serialize;
 use clap::{Arg, Command};
 use slog::{Logger, debug, error, info, o};
-
-static NOTIFY: (Mutex<bool>, Condvar) = (Mutex::new(true), Condvar::new());
-static RUNNING: AtomicBool = AtomicBool::new(true);
-
-struct Client {
-    inner: Peer,
-    log: Logger,
-    last_heartbeat: Arc<RwLock<Instant>>,
-}
-
-impl Client {
-    fn handle_packet(&mut self, mut buf: &[u8]) -> Result<()> {
-        match IncomingMessage::deserialize(&mut buf)? {
-            IncomingMessage::Data(buf) => {
-                let data = IncomingAudioData::deserialize(IncomingServerData::deserialize(buf)?)?;
-                self.handle_data(data);
-            }
-            IncomingMessage::ServerCommand(cmd) => match cmd {
-                ServerCommand::Heartbeat(_) => {
-                    debug!(self.log, "Received server heartbeat");
-                    let mut value = self.last_heartbeat.write().unwrap();
-                    *value = Instant::now();
-                }
-                ServerCommand::Close(_) => {
-                    info!(self.log, "Server closed");
-                    stop();
-                }
-                _ => (),
-            },
-            _ => (),
-        }
-        Ok(())
-    }
-
-    fn handle_data<R: Read>(&mut self, data: IncomingAudioData<R>) {
-        self.write(data)
-            .map_err(|e| error!(self.log, "Failed to write incoming audio data"; "error" => e.to_string()))
-            .ok();
-    }
-}
-
-impl Deref for Client {
-    type Target = Peer;
-
-    fn deref(&self) -> &Self::Target {
-        &self.inner
-    }
-}
-
-impl DerefMut for Client {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.inner
-    }
-}
-
-struct HeartbeatWorker {
-    log: Logger,
-    stream_id: StreamId,
-    sock: SharedUdpWrapper<Arc<UdpSocket>>,
-    addr: SocketAddr,
-    last_heartbeat: Arc<RwLock<Instant>>,
-}
-
-impl HeartbeatWorker {
-    fn run(mut self) {
-        let (lock, cvar) = &NOTIFY;
-        let mut running = lock.lock().unwrap();
-        while *running {
-            let (update, _) = cvar
-                .wait_timeout_while(running, HEARTBEAT_INTERVAL, |val| *val && is_running())
-                .unwrap();
-            running = update;
-            if !self.check() {
-                break;
-            }
-            self.pulse();
-        }
-    }
-
-    fn check(&mut self) -> bool {
-        let elapsed = self.last_heartbeat.read().unwrap().elapsed();
-        if elapsed > HEARTBEAT_GRACE_PERIOD {
-            info!(self.log, "Closing due to server inactivity");
-            background_stop();
-            false
-        } else {
-            true
-        }
-    }
-
-    fn pulse(&mut self) {
-        let cmd: ClientCommand = ClientHeartbeat(self.stream_id).into();
-        self.sock
-            .send_message_to(cmd, self.addr)
-            .map_err(|e| error!(self.log, "Failed to send heartbeat"; "error" => e))
-            .ok();
-    }
-}
 
 fn cmd() -> Command {
     let cmd = Command::new("audiowire-udp-client")
@@ -173,62 +72,25 @@ fn run(
     config: Config,
     device: DeviceConfig,
     name: String,
-    saddr: SocketAddr,
+    addr: SocketAddr,
 ) -> Result<ExitCode> {
-    let DeviceConfig {
-        source_name,
-        sink_name,
-        source_enabled,
-        sink_enabled,
-        opus_enabled,
-    } = device;
     let mut sock = wrap_udp_owned(UdpSocket::bind("0.0.0.0:0")?);
+    info!(log, "Initiating handshake with server"; "addr" => addr);
 
-    info!(log, "Initiating handshake with server"; "addr" => saddr);
-    let org_timestamp = SystemTime::now();
-    let init: Handshake = HandshakeInit {
-        flags: StreamFlags {
-            source_enabled,
-            sink_enabled,
-            opus_enabled,
-        },
-    }
-    .into();
-    sock.send_message_to(init, &saddr)?;
-
-    let (message, addr) = sock.recv_message_from()?;
-    let rec_timestamp = SystemTime::now();
-
-    let HandshakeReply {
+    let HandshakeResult {
+        org_timestamp,
+        rec_timestamp,
         stream_id,
         flags,
         time,
-    } = if let IncomingMessage::Handshake(Handshake::Reply(reply)) = message {
-        reply
-    } else {
-        error!(log, "We should get handshake reply here");
-        return _Ok(ExitCode::FAILURE);
-    };
-    let opus_enabled = device.opus_enabled && flags.opus_enabled;
-
-    info!(
-        log,
-        "Got handshake reply";
-        "stream_id" => stream_id,
-        "stream_flags" => flags,
-        "rec_timestamp" => logging::Timestamp(time.rec_timestamp),
-        "xmt_timestamp" => logging::Timestamp(time.xmt_timestamp)
-    );
-
-    let ack: Handshake = HandshakeAck {
-        stream_id,
-        time: NetworkTime {
-            rec_timestamp,
-            xmt_timestamp: SystemTime::now(),
-        },
-    }
-    .into();
-    sock.send_message_to(ack, &saddr)?;
+    } = start_handshake(&log, &device, &mut sock, &addr)?;
+    let DeviceConfig {
+        source_name,
+        sink_name,
+        opus_enabled,
+        ..
+    } = device;
+    let opus_enabled = opus_enabled && flags.opus_enabled;
 
     let sock = Arc::new(sock.into_inner());
     sock.set_nonblocking(true)?;
@@ -279,33 +141,43 @@ fn run(
         None
     };
 
+    let notify = Arc::new((Mutex::new(()), Condvar::new(), AtomicBool::new(true)));
     let last_heartbeat = Arc::new(RwLock::new(Instant::now()));
-    let mut client = Client {
-        inner: Peer { record, playback },
-        log: log.clone(),
-        last_heartbeat: Arc::clone(&last_heartbeat),
+    let mut client = {
+        let notify = Arc::clone(&notify);
+        Client::new(
+            Peer { record, playback },
+            log.clone(),
+            Arc::clone(&last_heartbeat),
+            move || foreground_stop(&notify),
+        )
     };
     let mut handles = Vec::new();
 
     // Cancel handler
-    ctrlc::set_handler(|| stop()).unwrap();
+    {
+        let notify = Arc::clone(&notify);
+        ctrlc::set_handler(move || foreground_stop(&notify)).unwrap();
+    }
 
     // Heartbeat monitor
     handles.push({
-        let worker = HeartbeatWorker {
-            log: log.new(o!("worker" => "heartbeat")),
+        let worker = HeartbeatWorker::new(
+            log.new(o!("worker" => "heartbeat")),
             stream_id,
-            sock: wrap_udp(Arc::clone(&sock)),
+            Arc::clone(&sock),
             addr,
+            Arc::clone(&notify),
             last_heartbeat,
-        };
+        );
         thread::spawn(|| worker.run())
     });
 
+    let (_, _, running) = &*notify;
     let interval = config.buffer_duration() / 4;
     let mut exit_code = ExitCode::SUCCESS;
     let mut sock = wrap_udp(sock);
-    while is_running() {
+    while running.load(Ordering::Acquire) {
         let (buf, addr) = match sock.raw_recv_from() {
             Ok(value) => value,
             Err(e) if e.kind() == ErrorKind::WouldBlock => {
@@ -333,18 +205,9 @@ fn run(
     Ok(exit_code)
 }
 
-fn is_running() -> bool {
-    RUNNING.load(Ordering::Relaxed)
-}
-
-fn stop() {
-    background_stop();
-    let (lock, cvar) = &NOTIFY;
-    let mut running = lock.lock().unwrap();
-    *running = false;
+fn foreground_stop(notify: &Arc<(Mutex<()>, Condvar, AtomicBool)>) {
+    let (lock, cvar, running) = &**notify;
+    running.store(false, Ordering::Release);
+    let mut _locked = lock.lock().unwrap();
     cvar.notify_all();
-}
-
-fn background_stop() {
-    RUNNING.store(false, Ordering::Relaxed);
 }

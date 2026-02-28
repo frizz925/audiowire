@@ -76,16 +76,14 @@ fn run(log: Logger, config: Config, device: DeviceConfig, addr: SocketAddr) -> R
     info!(log, "Server listening at {}", addr.to_string());
     sock.set_nonblocking(true)?;
 
-    let notify = Arc::new((Mutex::new(()), Condvar::new()));
-    let running = Arc::new(AtomicBool::new(true));
+    let notify = Arc::new((Mutex::new(()), Condvar::new(), AtomicBool::new(true)));
 
     // Signal handler
     {
         let notify = Arc::clone(&notify);
-        let running = Arc::clone(&running);
         ctrlc::set_handler(move || {
+            let (lock, cvar, running) = &*notify;
             running.store(false, Ordering::Relaxed);
-            let (lock, cvar) = &*notify;
             let _locked = lock.lock().unwrap();
             cvar.notify_all();
         })
@@ -103,10 +101,10 @@ fn run(log: Logger, config: Config, device: DeviceConfig, addr: SocketAddr) -> R
         Arc::clone(&sock),
         Arc::clone(&clients),
         Arc::clone(&notify),
-        Arc::clone(&running),
     );
     handles.push(thread::spawn(|| worker.run()));
 
+    let (_, _, running) = &*notify;
     let mut exit_code = ExitCode::SUCCESS;
     let mut sock = wrap_udp(sock);
     while running.load(Ordering::Acquire) {

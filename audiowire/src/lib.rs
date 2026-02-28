@@ -1,6 +1,7 @@
 extern crate opus as extern_opus;
 
 pub mod backend;
+pub mod client;
 pub mod command;
 pub mod logging;
 pub mod opus;

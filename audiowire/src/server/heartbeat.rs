@@ -22,8 +22,7 @@ pub struct HeartbeatWorker {
     log: Logger,
     sock: SharedUdpWrapper<Arc<UdpSocket>>,
     clients: SharedClientMap,
-    notify: Arc<(Mutex<()>, Condvar)>,
-    running: Arc<AtomicBool>,
+    notify: Arc<(Mutex<()>, Condvar, AtomicBool)>,
 }
 
 impl HeartbeatWorker {
@@ -31,15 +30,13 @@ impl HeartbeatWorker {
         log: Logger,
         sock: Arc<UdpSocket>,
         clients: SharedClientMap,
-        notify: Arc<(Mutex<()>, Condvar)>,
-        running: Arc<AtomicBool>,
+        notify: Arc<(Mutex<()>, Condvar, AtomicBool)>,
     ) -> Self {
         Self {
             log,
             sock: wrap_udp(sock),
             clients,
             notify,
-            running,
         }
     }
 
@@ -51,11 +48,11 @@ impl HeartbeatWorker {
             notify,
             ..
         } = self;
-        let (lock, cvar) = &*notify;
-        let mut running = lock.lock().unwrap();
-        while self.running.load(Ordering::Acquire) {
-            let (update, _) = cvar.wait_timeout(running, HEARTBEAT_INTERVAL).unwrap();
-            running = update;
+        let (lock, cvar, running) = &*notify;
+        let mut guard = lock.lock().unwrap();
+        while running.load(Ordering::Acquire) {
+            let (update, _) = cvar.wait_timeout(guard, HEARTBEAT_INTERVAL).unwrap();
+            guard = update;
             Self::check(&log, &clients, &mut sock);
         }
     }

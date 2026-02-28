@@ -152,8 +152,8 @@ where
     let rb = Arc::new(RingBuf::new(config.max_buffer_size()));
     let stream = {
         let rb = Arc::clone(&rb);
-        let log = log.clone();
-        let error_log = log.clone();
+        let log = log.to_owned();
+        let error_log = log.to_owned();
 
         let frames = config.max_buffer_frames;
         let bufsize = config.max_buffer_size();
@@ -162,7 +162,7 @@ where
             "frames" => frames, "rtt" => rtt,
         );
 
-        StreamBuilder::new(config.clone())
+        StreamBuilder::new(config.to_owned())
             .write_cb(move |dst| {
                 let mut src = rb.read_chunks();
                 let remaining = src.remaining();

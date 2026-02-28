@@ -136,8 +136,8 @@ where
     let new_addr = Arc::new(Mutex::new(addr));
     let stream = {
         let mut producer = RecordProducer {
-            log: log.clone(),
-            config: config.clone(),
+            log: log.to_owned(),
+            config: config.to_owned(),
 
             sock,
             addr,
@@ -152,7 +152,7 @@ where
                 producer.maybe_update_socket();
                 producer.write(src, &mut serialize);
             })
-            .error_cb(create_error_cb(log.clone()))
+            .error_cb(create_error_cb(log.to_owned()))
             .start(name, device)?
     };
     info!(

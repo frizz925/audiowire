@@ -26,7 +26,7 @@ pub fn audio_check(log: &Logger, config: &Config, device: &DeviceConfig) -> Resu
         source_enabled,
         sink_enabled,
         opus_enabled,
-    } = device.clone();
+    } = device.to_owned();
     let notify = Arc::new((Mutex::new(false), Condvar::new()));
     let (error_tx, error_rx) = mpsc::channel();
     let (data_tx, data_rx) = mpsc::sync_channel(1);
@@ -47,9 +47,9 @@ pub fn audio_check(log: &Logger, config: &Config, device: &DeviceConfig) -> Resu
     let opus_message = if opus_enabled { "enabled" } else { "disabled" };
 
     let _source = if source_enabled {
-        let stream = StreamBuilder::new(config.clone())
-            .read_cb(on_read(config, data_tx, encoder, notify.clone()))
-            .error_cb(on_error(error_tx.clone(), notify.clone()))
+        let stream = StreamBuilder::new(config.to_owned())
+            .read_cb(on_read(config, data_tx, encoder, notify.to_owned()))
+            .error_cb(on_error(error_tx.to_owned(), notify.to_owned()))
             .start("AudioWire test record", source_name)?;
         info!(
             log, "Started record device";
@@ -59,7 +59,7 @@ pub fn audio_check(log: &Logger, config: &Config, device: &DeviceConfig) -> Resu
         );
         Some(stream)
     } else {
-        let config = config.clone();
+        let config = config.to_owned();
         let notify = Arc::clone(&notify);
         thread::spawn(move || {
             let mut buf = [0u8; 65536];
@@ -77,9 +77,9 @@ pub fn audio_check(log: &Logger, config: &Config, device: &DeviceConfig) -> Resu
     };
 
     let _sink = if sink_enabled {
-        let stream = StreamBuilder::new(config.clone())
-            .write_cb(on_write(config, data_rx, decoder, notify.clone()))
-            .error_cb(on_error(error_tx.clone(), notify.clone()))
+        let stream = StreamBuilder::new(config.to_owned())
+            .write_cb(on_write(config, data_rx, decoder, notify.to_owned()))
+            .error_cb(on_error(error_tx.to_owned(), notify.to_owned()))
             .start("AudioWire test playback", sink_name)?;
         info!(
             log, "Started playback device";
@@ -89,7 +89,7 @@ pub fn audio_check(log: &Logger, config: &Config, device: &DeviceConfig) -> Resu
         );
         Some(stream)
     } else {
-        let config = config.clone();
+        let config = config.to_owned();
         let notify = Arc::clone(&notify);
         thread::spawn(move || {
             let src = data_rx.recv().unwrap();
