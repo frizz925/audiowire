@@ -71,7 +71,12 @@ impl PlaybackStream {
         let delay = time_delta(timestamp, SystemTime::now()) - delta - (rtt / 2);
         if delay > buffer_ms {
             trace!(log, "Dropping out of buffer window packet");
-            return Ok(());
+            // For some reason Windows client would send timestamps that drifted
+            // a bit far into the past and causing the packets being dropped.
+            //
+            // Until the issue is fixed, we'll allow "late" packets to be
+            // processed.
+            // return Ok(());
         }
 
         let len = usize::deserialize(&mut reader)?;
