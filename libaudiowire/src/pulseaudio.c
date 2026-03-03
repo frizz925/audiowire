@@ -150,7 +150,7 @@ aw_result_t aw_start(aw_stream_t **s,
         break;
     }
 
-    size_t bufsize = sample_buffer_size(&cfg, cfg.buffer_frames);
+    size_t bufsize = frame_buffer_size(&cfg, cfg.buffer_frames);
     pa_buffer_attr *ba = &stream->buffer_attr;
     ba->fragsize = bufsize;
     ba->minreq = bufsize;
