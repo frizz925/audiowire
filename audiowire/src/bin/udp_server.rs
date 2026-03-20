@@ -8,7 +8,7 @@ use std::{
         atomic::{AtomicBool, Ordering},
     },
     thread,
-    time::SystemTime,
+    time::Instant,
 };
 
 use anyhow::{Ok as _Ok, Result};
@@ -21,9 +21,9 @@ use audiowire::{
         socket::{UdpWrapper, wrap_udp},
     },
     server::{
+        Context, Server,
         client::{Client, ClientRunning},
         heartbeat::HeartbeatWorker,
-        server::{Context, Server},
     },
 };
 use clap::{Arg, Command, value_parser};
@@ -121,7 +121,7 @@ fn run(log: Logger, config: Config, device: DeviceConfig, addr: SocketAddr) -> R
             }
         };
         trace!(log, "Received data {} bytes", buf.len(); "addr" => addr);
-        let rec_timestamp = SystemTime::now();
+        let rec_timestamp = Instant::now();
 
         let log = log.new(o!("addr" => addr));
         let context = Context {

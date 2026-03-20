@@ -1,4 +1,4 @@
-use std::{net::SocketAddr, time::SystemTime};
+use std::{net::SocketAddr, sync::LazyLock, time::Instant};
 
 use slog::{Logger, info};
 
@@ -14,9 +14,11 @@ use crate::{
     },
 };
 
+pub static TIMESTAMP_EPOCH: LazyLock<Instant> = LazyLock::new(|| Instant::now());
+
 pub struct HandshakeResult {
-    pub org_timestamp: SystemTime,
-    pub rec_timestamp: SystemTime,
+    pub org_timestamp: Instant,
+    pub rec_timestamp: Instant,
     pub stream_id: StreamId,
     pub flags: StreamFlags,
     pub time: NetworkTime,
@@ -35,7 +37,7 @@ pub fn start_handshake(
         ..
     } = *device;
 
-    let org_timestamp = SystemTime::now();
+    let org_timestamp = Instant::now();
     let init: Handshake = HandshakeInit {
         flags: StreamFlags {
             source_enabled,
@@ -46,20 +48,21 @@ pub fn start_handshake(
     .into();
     sock.send_message_to(init, &daddr)?;
 
-    let HandshakeReply {
-        stream_id,
-        flags,
-        time,
-    } = loop {
+    let (reply, rec_timestamp) = loop {
         let (message, saddr) = sock.recv_message_from()?;
+        let rec_timestamp = Instant::now();
         if saddr.ne(daddr) {
             continue;
         }
         if let IncomingMessage::Handshake(Handshake::Reply(reply)) = message {
-            break reply;
+            break (reply, rec_timestamp);
         }
     };
-    let rec_timestamp = SystemTime::now();
+    let HandshakeReply {
+        stream_id,
+        flags,
+        time,
+    } = reply;
 
     info!(
         log,
@@ -70,11 +73,12 @@ pub fn start_handshake(
         "xmt_timestamp" => Timestamp(time.xmt_timestamp)
     );
 
+    let xmt_timestamp = Instant::now();
     let ack: Handshake = HandshakeAck {
         stream_id,
         time: NetworkTime {
-            rec_timestamp,
-            xmt_timestamp: SystemTime::now(),
+            rec_timestamp: rec_timestamp.duration_since(org_timestamp),
+            xmt_timestamp: xmt_timestamp.duration_since(org_timestamp),
         },
     }
     .into();

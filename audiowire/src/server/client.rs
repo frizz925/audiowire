@@ -2,7 +2,7 @@ use std::{
     io::Read,
     net::SocketAddr,
     ops::{Deref, DerefMut},
-    time::{Instant, SystemTime},
+    time::Instant,
 };
 
 use slog::{Logger, error, info};
@@ -31,7 +31,7 @@ impl From<ClientRunning> for Client {
 
 pub struct ClientHandshake {
     pub flags: StreamFlags,
-    pub org_timestamp: SystemTime,
+    pub org_timestamp: Instant,
     pub last_handshake: Instant,
 }
 

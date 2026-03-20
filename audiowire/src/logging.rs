@@ -1,9 +1,9 @@
-use std::{env, io::stderr, str::FromStr, time::SystemTime};
+use std::{env, io::stderr, str::FromStr, time::Duration};
 
 use chrono::Local;
 use slog::{Drain, Level, o};
 
-pub struct Timestamp(pub SystemTime);
+pub struct Timestamp(pub Duration);
 
 impl slog::Value for Timestamp {
     fn serialize(
@@ -12,12 +12,7 @@ impl slog::Value for Timestamp {
         key: slog::Key,
         serializer: &mut dyn slog::Serializer,
     ) -> slog::Result {
-        let timestamp = self
-            .0
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap()
-            .as_millis() as u64;
-        serializer.emit_u64(key, timestamp)
+        serializer.emit_u128(key, self.0.as_millis())
     }
 }
 

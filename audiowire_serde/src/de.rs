@@ -62,8 +62,14 @@ impl Deserialize for Vec<u8> {
 impl Deserialize for SystemTime {
     fn deserialize<R: Read>(reader: R) -> Result<Self> {
         let time = SystemTime::UNIX_EPOCH
-            .checked_add(Duration::from_millis(u64::deserialize(reader)?))
+            .checked_add(Duration::deserialize(reader)?)
             .unwrap();
         Ok(time)
+    }
+}
+
+impl Deserialize for Duration {
+    fn deserialize<R: Read>(reader: R) -> Result<Self> {
+        Ok(Duration::from_millis(u64::deserialize(reader)?))
     }
 }

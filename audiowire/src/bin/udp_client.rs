@@ -7,14 +7,14 @@ use std::{
         atomic::{AtomicBool, Ordering},
     },
     thread,
-    time::{Instant, SystemTime},
+    time::Instant,
 };
 
 use anyhow::Result;
 use audiowire::{
     backend::{config::Config, util::audio_check},
     client::{
-        client::Client,
+        Client,
         handshake::{HandshakeResult, start_handshake},
         heartbeat::HeartbeatWorker,
     },
@@ -111,7 +111,7 @@ fn run(
                     stream_id,
                     OutgoingAudioData {
                         sequence,
-                        timestamp: SystemTime::now(),
+                        timestamp: Instant::now().duration_since(org_timestamp),
                         data: src,
                     },
                 ))

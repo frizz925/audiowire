@@ -1,6 +1,6 @@
 use std::{
     io::{Result, Write},
-    time::SystemTime,
+    time::{Duration, SystemTime},
 };
 
 pub trait Serialize {
@@ -71,10 +71,13 @@ impl Serialize for str {
 
 impl Serialize for SystemTime {
     fn serialize<W: Write>(&self, writer: W) -> Result<()> {
-        (self
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap()
-            .as_millis() as u64)
-            .serialize(writer)
+            self.duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap().serialize(writer)
+    }
+}
+
+impl Serialize for Duration {
+    fn serialize<W: Write>(&self, writer: W) -> Result<()> {
+        (self.as_millis() as u64).serialize(writer)
     }
 }

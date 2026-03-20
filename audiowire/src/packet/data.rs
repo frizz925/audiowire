@@ -1,6 +1,6 @@
 use std::{
     io::{Read, Result},
-    time::SystemTime,
+    time::Duration,
 };
 
 use audiowire_derive::Serialize;
@@ -20,7 +20,7 @@ pub struct OutgoingServerData<T: Serialize>(pub T);
 #[derive(Serialize)]
 pub struct OutgoingAudioData<T: Serialize> {
     pub sequence: u64,
-    pub timestamp: SystemTime,
+    pub timestamp: Duration,
     pub data: T,
 }
 
@@ -42,7 +42,7 @@ impl IncomingServerData {
 
 pub struct IncomingAudioData<R: Read> {
     pub sequence: u64,
-    pub timestamp: SystemTime,
+    pub timestamp: Duration,
     pub reader: R,
 }
 
@@ -50,7 +50,7 @@ impl<R: Read> IncomingAudioData<R> {
     pub fn deserialize(mut reader: R) -> Result<Self> {
         Ok(Self {
             sequence: u64::deserialize(&mut reader)?,
-            timestamp: SystemTime::deserialize(&mut reader)?,
+            timestamp: Duration::deserialize(&mut reader)?,
             reader,
         })
     }

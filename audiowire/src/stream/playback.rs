@@ -2,7 +2,7 @@ use std::{
     io::Read,
     ops::{Deref, Neg},
     sync::Arc,
-    time::SystemTime,
+    time::{Duration, Instant},
 };
 
 use anyhow::Result;
@@ -14,6 +14,7 @@ use crate::{
         config::{Config, SampleFormat},
         stream::{Stream, StreamBuilder},
     },
+    logging::Timestamp,
     opus::convert_slice_mut,
     packet::{data::IncomingAudioData, time::NetworkTime},
     ringbuf::RingBuf,
@@ -31,9 +32,9 @@ pub struct PlaybackStream {
     rb: Arc<RingBuf<u8>>,
     buf: [u8; INTERNAL_BUFFER_SIZE],
 
-    rtt: i64,
-    delta: i64,
-    buffer_ms: i64,
+    rtt: Duration,
+    remote_epoch: Instant,
+    buffer_ms: Duration,
     sequence: u64,
 }
 
@@ -46,7 +47,7 @@ impl PlaybackStream {
             ref rb,
             ref mut buf,
             rtt,
-            delta,
+            remote_epoch,
             buffer_ms,
             ..
         } = *self;
@@ -66,17 +67,19 @@ impl PlaybackStream {
             self.sequence = sequence;
         }
 
-        // Determine if we should silently drop packets that are way outside
-        // of the buffer duration
-        let delay = time_delta(timestamp, SystemTime::now()) - delta - (rtt / 2);
+        // Determine if we should silently drop packets that are way outside of
+        // the buffer duration.
+        let local_ts = Instant::now();
+        let remote_ts = remote_epoch + timestamp - (rtt / 2);
+        let delay = local_ts.saturating_duration_since(remote_ts);
         if delay > buffer_ms {
             trace!(log, "Dropping out of buffer window packet");
             // For some reason Windows client would send timestamps that drifted
             // a bit far into the past and causing the packets being dropped.
             //
-            // Until the issue is fixed, we'll allow "late" packets to be
-            // processed.
-            // return Ok(());
+            // Need to test if the issue persists after switching to Instant and
+            // Duration.
+            return Ok(());
         }
 
         let len = usize::deserialize(&mut reader)?;
@@ -139,20 +142,27 @@ pub fn handle_playback<N, D>(
     name: N,
     device: Option<D>,
     time: &NetworkTime,
-    org_timestamp: SystemTime,
-    rec_timestamp: SystemTime,
+    org_timestamp: Instant,
+    rec_timestamp: Instant,
     opus_enabled: bool,
 ) -> Result<PlaybackStream>
 where
     N: Into<Vec<u8>>,
     D: Into<Vec<u8>>,
 {
-    let local_dur = rec_timestamp.duration_since(org_timestamp)?;
-    let remote_dur = time.xmt_timestamp.duration_since(time.rec_timestamp)?;
-    let rtt = local_dur.abs_diff(remote_dur).as_millis() as i64;
-    let delta = time_delta(org_timestamp, time.rec_timestamp)
-        + time_delta(time.xmt_timestamp, rec_timestamp)
-        - rtt;
+    let local_dur = rec_timestamp.duration_since(org_timestamp);
+    let remote_dur = time.xmt_timestamp.saturating_sub(time.rec_timestamp);
+    let rtt = local_dur.abs_diff(remote_dur);
+
+    let remote_epoch = {
+        let local_epoch = org_timestamp;
+        let delta = (time.rec_timestamp.as_millis() as i64) - ((rtt.as_millis() as i64) / 2);
+        if delta >= 0 {
+            local_epoch - Duration::from_millis(delta as u64)
+        } else {
+            local_epoch + Duration::from_millis(delta.neg() as u64)
+        }
+    };
 
     let rb = Arc::new(RingBuf::new(config.max_buffer_size()));
     let stream = {
@@ -164,7 +174,7 @@ where
         let bufsize = config.max_buffer_size();
         info!(
             log, "Using buffer size {bufsize} bytes";
-            "frames" => frames, "rtt" => rtt,
+            "frames" => frames, "rtt" => Timestamp(rtt),
         );
 
         StreamBuilder::new(config.to_owned())
@@ -208,15 +218,8 @@ where
         buf: [0u8; 65536],
 
         rtt,
-        delta,
-        buffer_ms: config.max_buffer_duration().as_millis() as i64,
+        remote_epoch,
+        buffer_ms: config.max_buffer_duration(),
         sequence: 0,
     })
-}
-
-fn time_delta(earlier: SystemTime, later: SystemTime) -> i64 {
-    match later.duration_since(earlier) {
-        Ok(d) => d.as_millis() as i64,
-        Err(e) => (e.duration().as_millis() as i64).neg(),
-    }
 }
