@@ -1,5 +1,6 @@
 pub mod handshake;
 pub mod heartbeat;
+pub mod time_sync;
 
 use std::{
     io::Read,
@@ -13,7 +14,7 @@ use slog::{Logger, debug, error, info};
 
 use crate::{
     packet::{
-        command::server::ServerCommand,
+        command::server::{ServerCommand, ServerTimeSync},
         data::{IncomingAudioData, IncomingServerData},
         message::IncomingMessage,
     },
@@ -66,6 +67,12 @@ impl Client {
                 debug!(self.log, "Received server heartbeat");
                 let mut value = self.last_heartbeat.write().unwrap();
                 *value = Instant::now();
+            }
+            ServerCommand::TimeSync(ServerTimeSync(timestamp)) => {
+                debug!(self.log, "Received server time sync");
+                if let Some(playback) = self.inner.playback.as_mut() {
+                    playback.update_remote_epoch(timestamp);
+                }
             }
             ServerCommand::Close(_) => {
                 info!(self.log, "Server closed");

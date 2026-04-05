@@ -1,31 +1,34 @@
 use std::{
-    net::{ToSocketAddrs, UdpSocket},
+    net::UdpSocket,
     sync::{
         Arc, Condvar, Mutex,
         atomic::{AtomicBool, Ordering},
     },
 };
 
-use slog::{Logger, error, info};
+use slog::{Logger, error};
 
 use crate::{
-    HEARTBEAT_GRACE_PERIOD, HEARTBEAT_INTERVAL,
+    TIME_SYNC_INTERVAL,
     packet::{
-        command::server::SERVER_HEARTBEAT,
+        command::server::{ServerCommand, ServerTimeSync},
         socket::{SharedUdpWrapper, UdpWrapper, wrap_udp},
         stream::StreamId,
     },
-    server::{SharedClientMap, client::Client},
+    server::{
+        SharedClientMap,
+        client::{Client, ClientRunning},
+    },
 };
 
-pub struct HeartbeatWorker {
+pub struct TimeSyncWorker {
     log: Logger,
     sock: SharedUdpWrapper<Arc<UdpSocket>>,
     clients: SharedClientMap,
     notify: Arc<(Mutex<()>, Condvar, AtomicBool)>,
 }
 
-impl HeartbeatWorker {
+impl TimeSyncWorker {
     pub fn new(
         log: Logger,
         sock: Arc<UdpSocket>,
@@ -51,46 +54,39 @@ impl HeartbeatWorker {
         let (lock, cvar, running) = &*notify;
         let mut guard = lock.lock().unwrap();
         loop {
-            let (update, _) = cvar.wait_timeout(guard, HEARTBEAT_INTERVAL).unwrap();
+            let (update, _) = cvar.wait_timeout(guard, TIME_SYNC_INTERVAL).unwrap();
             guard = update;
             if !running.load(Ordering::Acquire) {
                 break;
             }
-            Self::check(&log, &clients, &mut sock);
+            Self::sync_all(&log, &clients, &mut sock);
         }
     }
 
-    fn check(log: &Logger, clients: &SharedClientMap, sock: &mut SharedUdpWrapper<Arc<UdpSocket>>) {
-        let mut dead_clients = Vec::new();
+    fn sync_all(
+        log: &Logger,
+        clients: &SharedClientMap,
+        sock: &mut SharedUdpWrapper<Arc<UdpSocket>>,
+    ) {
         for (stream_id, client) in clients.read().unwrap().iter() {
-            let last_instant = match client {
-                Client::Handshake(c) => c.last_handshake,
-                Client::Running(c) => {
-                    Self::pulse(log, sock, c.addr, *stream_id);
-                    c.last_heartbeat
-                }
+            let client = if let Client::Running(c) = client {
+                c
+            } else {
+                continue;
             };
-            if last_instant.elapsed() > HEARTBEAT_GRACE_PERIOD {
-                dead_clients.push(*stream_id);
-            }
-        }
-        let mut clients = clients.write().unwrap();
-        for stream_id in dead_clients {
-            clients.remove(&stream_id);
-            info!(
-                log, "Removed client due to inactivity";
-                "stream_id" => stream_id
-            );
+            Self::sync(log, sock, *stream_id, client);
         }
     }
 
-    fn pulse<A: ToSocketAddrs>(
+    fn sync(
         log: &Logger,
         sock: &mut SharedUdpWrapper<Arc<UdpSocket>>,
-        addr: A,
         stream_id: StreamId,
+        client: &ClientRunning,
     ) {
-        sock.send_message_to(SERVER_HEARTBEAT, addr)
+        let timestamp = client.local_epoch.elapsed();
+        let command = ServerCommand::TimeSync(ServerTimeSync(timestamp));
+        sock.send_message_to(command, client.addr)
             .map_err(|e| {
                 error!(
                     log, "Failed to send heartbeat";

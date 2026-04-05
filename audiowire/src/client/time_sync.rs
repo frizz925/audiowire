@@ -1,40 +1,40 @@
 use std::{
     net::{SocketAddr, UdpSocket},
     sync::{
-        Arc, Condvar, Mutex, RwLock,
+        Arc, Condvar, Mutex,
         atomic::{AtomicBool, Ordering},
     },
     time::Instant,
 };
 
-use slog::{Logger, error, info};
+use slog::{Logger, error};
 
 use crate::{
-    HEARTBEAT_GRACE_PERIOD, HEARTBEAT_INTERVAL,
+    TIME_SYNC_INTERVAL,
     packet::{
-        command::client::{ClientCommand, ClientHeartbeat},
+        command::client::{ClientCommand, ClientTimeSync},
         socket::{SharedUdpWrapper, UdpWrapper, wrap_udp},
         stream::StreamId,
     },
 };
 
-pub struct HeartbeatWorker {
+pub struct TimeSyncWorker {
     log: Logger,
     stream_id: StreamId,
     sock: SharedUdpWrapper<Arc<UdpSocket>>,
     addr: SocketAddr,
     notify: Arc<(Mutex<()>, Condvar, AtomicBool)>,
-    last_heartbeat: Arc<RwLock<Instant>>,
+    local_epoch: Instant,
 }
 
-impl HeartbeatWorker {
+impl TimeSyncWorker {
     pub fn new(
         log: Logger,
         stream_id: StreamId,
         sock: Arc<UdpSocket>,
         addr: SocketAddr,
         notify: Arc<(Mutex<()>, Condvar, AtomicBool)>,
-        last_heartbeat: Arc<RwLock<Instant>>,
+        local_epoch: Instant,
     ) -> Self {
         Self {
             log,
@@ -42,7 +42,7 @@ impl HeartbeatWorker {
             sock: wrap_udp(sock),
             addr,
             notify,
-            last_heartbeat,
+            local_epoch,
         }
     }
 
@@ -53,43 +53,31 @@ impl HeartbeatWorker {
             mut sock,
             addr,
             notify,
-            last_heartbeat,
+            local_epoch,
         } = self;
         let (lock, cvar, running) = &*notify;
         let mut guard = lock.lock().unwrap();
         loop {
-            let (update, _) = cvar.wait_timeout(guard, HEARTBEAT_INTERVAL).unwrap();
+            let (update, _) = cvar.wait_timeout(guard, TIME_SYNC_INTERVAL).unwrap();
             guard = update;
             if !running.load(Ordering::Acquire) {
                 break;
             }
-            if !Self::check(&log, &last_heartbeat, running) {
-                break;
-            }
-            Self::pulse(&log, &mut sock, stream_id, &addr);
+            Self::sync(&log, &mut sock, stream_id, &addr, local_epoch);
         }
     }
 
-    fn check(log: &Logger, last_heartbeat: &Arc<RwLock<Instant>>, running: &AtomicBool) -> bool {
-        let elapsed = last_heartbeat.read().unwrap().elapsed();
-        if elapsed > HEARTBEAT_GRACE_PERIOD {
-            info!(log, "Closing due to server inactivity");
-            running.store(false, Ordering::Release);
-            false
-        } else {
-            true
-        }
-    }
-
-    fn pulse<S: AsRef<UdpSocket>>(
+    fn sync<S: AsRef<UdpSocket>>(
         log: &Logger,
         sock: &mut SharedUdpWrapper<S>,
         stream_id: StreamId,
         addr: &SocketAddr,
+        local_epoch: Instant,
     ) {
-        let cmd: ClientCommand = ClientHeartbeat(stream_id).into();
+        let timestamp = local_epoch.elapsed();
+        let cmd: ClientCommand = ClientTimeSync(stream_id, timestamp).into();
         sock.send_message_to(cmd, addr)
-            .map_err(|e| error!(log, "Failed to send heartbeat"; "error" => e))
+            .map_err(|e| error!(log, "Failed to send time sync"; "error" => e))
             .ok();
     }
 }

@@ -1,5 +1,6 @@
 pub mod client;
 pub mod heartbeat;
+pub mod time_sync;
 
 use std::{
     collections::HashMap,
@@ -18,7 +19,7 @@ use crate::{
     command::DeviceConfig,
     logging,
     packet::{
-        command::client::{ClientClose, ClientCommand, ClientHeartbeat},
+        command::client::{ClientClose, ClientCommand, ClientHeartbeat, ClientTimeSync},
         data::{IncomingClientData, OutgoingAudioData, OutgoingServerData},
         handshake::{Handshake, HandshakeAck, HandshakeInit, HandshakeReply},
         message::{IncomingMessage, OutgoingMessage},
@@ -111,6 +112,14 @@ impl Server {
                     debug!(log, "Received client heartbeat");
                     c.maybe_update_addr(&log, addr);
                     c.last_heartbeat = Instant::now();
+                }
+            }
+            ClientCommand::TimeSync(ClientTimeSync(stream_id, timestamp)) => {
+                if let Some(Client::Running(c)) = self.clients.write().unwrap().get_mut(&stream_id)
+                {
+                    let log = log.new(o!("stream_id" => stream_id));
+                    debug!(log, "Received client time sync");
+                    c.maybe_update_remote_epoch(timestamp);
                 }
             }
             ClientCommand::Close(ClientClose(stream_id)) => {
@@ -228,6 +237,9 @@ impl Server {
         } = hs;
         let opus_enabled = self.device.opus_enabled && flags.opus_enabled;
 
+        let rtt = time.calculate_rtt(org_timestamp, rec_timestamp);
+        let remote_epoch = time.calculate_remote_epoch(org_timestamp, rtt);
+
         let mut sequence = 0;
         let record = if self.device.source_enabled && flags.sink_enabled {
             let log = log.new(o!("stream" => "record"));
@@ -261,17 +273,16 @@ impl Server {
                 &self.config,
                 addr.to_string(),
                 self.device.sink_name.as_deref(),
-                &time,
-                org_timestamp,
-                rec_timestamp,
                 opus_enabled,
+                remote_epoch,
+                rtt,
             )?;
             Some(stream)
         } else {
             None
         };
 
-        let client = ClientRunning::new(Peer { record, playback }, addr.to_owned());
+        let client = ClientRunning::new(Peer { record, playback }, addr.to_owned(), org_timestamp);
         self.clients
             .write()
             .unwrap()

@@ -24,6 +24,7 @@ use audiowire::{
         Context, Server,
         client::{Client, ClientRunning},
         heartbeat::HeartbeatWorker,
+        time_sync::TimeSyncWorker,
     },
 };
 use clap::{Arg, Command, value_parser};
@@ -98,6 +99,15 @@ fn run(log: Logger, config: Config, device: DeviceConfig, addr: SocketAddr) -> R
     // Heartbeat handler
     let worker = HeartbeatWorker::new(
         log.new(o!("worker" => "heartbeat")),
+        Arc::clone(&sock),
+        Arc::clone(&clients),
+        Arc::clone(&notify),
+    );
+    handles.push(thread::spawn(|| worker.run()));
+
+    // Time sync handler
+    let worker = TimeSyncWorker::new(
+        log.new(o!("worker" => "time_sync")),
         Arc::clone(&sock),
         Arc::clone(&clients),
         Arc::clone(&notify),

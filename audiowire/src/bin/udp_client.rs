@@ -17,6 +17,7 @@ use audiowire::{
         Client,
         handshake::{HandshakeResult, start_handshake},
         heartbeat::HeartbeatWorker,
+        time_sync::TimeSyncWorker,
     },
     command::{DeviceConfig, add_device_args},
     logging,
@@ -92,6 +93,9 @@ fn run(
     } = device;
     let opus_enabled = opus_enabled && flags.opus_enabled;
 
+    let rtt = time.calculate_rtt(org_timestamp, rec_timestamp);
+    let remote_epoch = time.calculate_remote_epoch(org_timestamp, rtt);
+
     let sock = Arc::new(sock.into_inner());
     sock.set_nonblocking(true)?;
 
@@ -131,10 +135,9 @@ fn run(
             &config,
             name.as_str(),
             sink_name,
-            &time,
-            org_timestamp,
-            rec_timestamp,
             opus_enabled,
+            remote_epoch,
+            rtt,
         )?;
         Some(stream)
     } else {
@@ -169,6 +172,19 @@ fn run(
             addr,
             Arc::clone(&notify),
             last_heartbeat,
+        );
+        thread::spawn(|| worker.run())
+    });
+
+    // Time syncer
+    handles.push({
+        let worker = TimeSyncWorker::new(
+            log.new(o!("worker" => "time_sync")),
+            stream_id,
+            Arc::clone(&sock),
+            addr,
+            Arc::clone(&notify),
+            org_timestamp,
         );
         thread::spawn(|| worker.run())
     });

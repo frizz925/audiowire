@@ -2,7 +2,7 @@ use std::{
     io::Read,
     net::SocketAddr,
     ops::{Deref, DerefMut},
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use slog::{Logger, error, info};
@@ -39,14 +39,16 @@ pub struct ClientRunning {
     inner: Peer,
     pub addr: SocketAddr,
     pub last_heartbeat: Instant,
+    pub local_epoch: Instant,
 }
 
 impl ClientRunning {
-    pub fn new(peer: Peer, addr: SocketAddr) -> Self {
+    pub fn new(peer: Peer, addr: SocketAddr, local_epoch: Instant) -> Self {
         Self {
             inner: peer,
             addr,
             last_heartbeat: Instant::now(),
+            local_epoch,
         }
     }
 
@@ -68,6 +70,12 @@ impl ClientRunning {
         if let Some(record) = self.record.as_ref() {
             record.update_addr(addr);
             self.addr = addr;
+        }
+    }
+
+    pub fn maybe_update_remote_epoch(&mut self, timestamp: Duration) {
+        if let Some(playback) = self.playback.as_mut() {
+            playback.update_remote_epoch(timestamp);
         }
     }
 }

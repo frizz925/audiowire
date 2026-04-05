@@ -1,6 +1,6 @@
 use std::{
     io::Read,
-    ops::{Deref, Neg},
+    ops::Deref,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -16,7 +16,7 @@ use crate::{
     },
     logging::Timestamp,
     opus::convert_slice_mut,
-    packet::{data::IncomingAudioData, time::NetworkTime},
+    packet::data::IncomingAudioData,
     ringbuf::RingBuf,
     stream::error::create_error_cb,
 };
@@ -100,6 +100,10 @@ impl PlaybackStream {
 
         Ok(())
     }
+
+    pub fn update_remote_epoch(&mut self, timestamp: Duration) {
+        self.remote_epoch = Instant::now() - timestamp - (self.rtt / 2);
+    }
 }
 
 fn aligned_split_at_mut(
@@ -141,29 +145,14 @@ pub fn handle_playback<N, D>(
     config: &Config,
     name: N,
     device: Option<D>,
-    time: &NetworkTime,
-    org_timestamp: Instant,
-    rec_timestamp: Instant,
     opus_enabled: bool,
+    remote_epoch: Instant,
+    rtt: Duration,
 ) -> Result<PlaybackStream>
 where
     N: Into<Vec<u8>>,
     D: Into<Vec<u8>>,
 {
-    let local_dur = rec_timestamp.duration_since(org_timestamp);
-    let remote_dur = time.xmt_timestamp.saturating_sub(time.rec_timestamp);
-    let rtt = local_dur.abs_diff(remote_dur);
-
-    let remote_epoch = {
-        let local_epoch = org_timestamp;
-        let delta = (time.rec_timestamp.as_millis() as i64) - ((rtt.as_millis() as i64) / 2);
-        if delta >= 0 {
-            local_epoch - Duration::from_millis(delta as u64)
-        } else {
-            local_epoch + Duration::from_millis(delta.neg() as u64)
-        }
-    };
-
     let rb = Arc::new(RingBuf::new(config.max_buffer_size()));
     let stream = {
         let rb = Arc::clone(&rb);
